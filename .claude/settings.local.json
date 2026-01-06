@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(npx create-next-app@latest:*)",
+      "Bash(robocopy:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(dir \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\")",
+      "Bash(npm install:*)",
+      "Bash(npx shadcn@latest init:*)",
+      "Bash(npx shadcn@latest add:*)",
+      "Bash(del \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\src\\\\app\\\\page.tsx\")",
+      "Bash(npm run build:*)",
+      "Bash(move \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\src\\\\middleware.ts\" \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\src\\\\proxy.ts\")",
+      "Bash(npm run dev:*)",
+      "Bash(node -e:*)",
+      "Bash(npx drizzle-kit push:*)",
+      "Bash(npx tsx:*)",
+      "Bash(npx dotenv-cli:*)",
+      "Bash(taskkill:*)",
+      "Bash(timeout /t 5 /nobreak)",
+      "Bash(del \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\.next\\\\dev\\\\lock\")",
+      "Bash(npx next dev -p 3002)",
+      "mcp__ide__getDiagnostics",
+      "Bash(dir \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\src\\\\app\\\\\\(admin\\)\\\\admin\\\\users\")",
+      "Bash(dir:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(ls:*)",
+      "Skill(frontend-design)",
+      "Bash(npm uninstall:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
