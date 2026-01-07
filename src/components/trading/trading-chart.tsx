@@ -156,43 +156,13 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
     const currentPrice = priceData?.success ? Number(priceData.price) : null;
     const newCoordinates = new Map<string, number>();
 
-    // Helper function to calculate Y coordinate from price
+    // Helper function to calculate Y coordinate from price using chart's built-in method
     const calculateYCoordinate = (price: number): number | null => {
       try {
-        const timeScale = chartRef.current?.timeScale();
-        const visibleRange = timeScale?.getVisibleLogicalRange();
-        if (!visibleRange) return null;
+        if (!candlestickSeriesRef.current) return null;
 
-        // Get price scale and calculate coordinate
-        const priceScale = chartRef.current?.priceScale("right");
-        if (!priceScale) return null;
-
-        // Calculate using the container's bounding rect and price range
-        const container = chartContainerRef.current;
-        if (!container) return null;
-
-        const rect = container.getBoundingClientRect();
-        const chartHeight = rect.height;
-
-        // Get visible price range from the series
-        const seriesData = candlestickSeriesRef.current?.data();
-        if (!seriesData) return null;
-
-        // Find min/max prices in visible range
-        let minPrice = Infinity;
-        let maxPrice = -Infinity;
-
-        (seriesData as any[]).forEach((candle: any) => {
-          if (candle.low < minPrice) minPrice = candle.low;
-          if (candle.high > maxPrice) maxPrice = candle.high;
-        });
-
-        if (minPrice === Infinity || maxPrice === -Infinity) return null;
-
-        // Calculate Y coordinate based on price range
-        const priceRange = maxPrice - minPrice;
-        const priceRatio = (maxPrice - price) / priceRange;
-        const yCoord = priceRatio * (chartHeight - 40) + 20; // Add margins
+        // Use the chart's built-in priceToCoordinate for accurate positioning
+        const yCoord = candlestickSeriesRef.current.priceToCoordinate(price);
 
         return yCoord;
       } catch (e) {
@@ -225,7 +195,7 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
             lineWidth: 2,
             lineStyle: 2, // Dashed
             axisLabelVisible: true,
-            title: `${isLong ? "LONG" : "SHORT"} ${quantity} @ $${entryPrice.toFixed(2)} | P&L: ${pnlSign}$${unrealizedPnL.toFixed(2)}`,
+            title: `${isLong ? "LONG" : "SHORT"} ${quantity} @ $${entryPrice.toFixed(2)} | P&L: ${pnlSign}$${unrealizedPnL.toFixed(2)}      `,
           });
           priceLinesRef.current.push(priceLine);
 
@@ -252,7 +222,7 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
               lineWidth: 2,
               lineStyle: 0, // Solid
               axisLabelVisible: true,
-              title: `${order.orderType.toUpperCase()} ${order.side.toUpperCase()} ${order.quantity} @ ${limitPrice.toFixed(2)}`,
+              title: `${order.orderType.toUpperCase()} ${order.side.toUpperCase()} ${order.quantity} @ ${limitPrice.toFixed(2)}      `,
             });
             priceLinesRef.current.push(priceLine);
 
@@ -272,7 +242,7 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
               lineWidth: 2,
               lineStyle: 1, // Dotted
               axisLabelVisible: true,
-              title: `STOP @ ${stopPrice.toFixed(2)}`,
+              title: `STOP @ ${stopPrice.toFixed(2)}      `,
             });
             priceLinesRef.current.push(priceLine);
 
@@ -287,6 +257,59 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
     }
 
     setPriceCoordinates(newCoordinates);
+  }, [positionsData, ordersData, symbol, priceData]);
+
+  // Update coordinates when chart is scrolled or zoomed
+  useEffect(() => {
+    if (!chartRef.current || !candlestickSeriesRef.current) return;
+
+    const updateCoordinates = () => {
+      const newCoordinates = new Map<string, number>();
+
+      // Recalculate position coordinates
+      if (positionsData?.success) {
+        const positions = positionsData.positions || [];
+        positions.forEach((position: any) => {
+          if (position.symbol === symbol && candlestickSeriesRef.current) {
+            const entryPrice = Number(position.avgEntryPrice);
+            const yCoord = candlestickSeriesRef.current.priceToCoordinate(entryPrice);
+            if (yCoord !== null) {
+              newCoordinates.set(`position-${position.id}`, yCoord);
+            }
+          }
+        });
+      }
+
+      // Recalculate order coordinates
+      if (ordersData?.success) {
+        const orders = ordersData.orders || [];
+        orders.forEach((order: any) => {
+          if (order.symbol === symbol && candlestickSeriesRef.current) {
+            const limitPrice = order.limitPrice ? Number(order.limitPrice) : null;
+            const stopPrice = order.stopPrice ? Number(order.stopPrice) : null;
+            const price = limitPrice || stopPrice;
+            if (price) {
+              const yCoord = candlestickSeriesRef.current.priceToCoordinate(price);
+              if (yCoord !== null) {
+                newCoordinates.set(`order-${order.id}`, yCoord);
+              }
+            }
+          }
+        });
+      }
+
+      setPriceCoordinates(newCoordinates);
+    };
+
+    // Subscribe to chart scale changes
+    const chart = chartRef.current;
+    chart.timeScale().subscribeVisibleLogicalRangeChange(updateCoordinates);
+    chart.subscribeCrosshairMove(updateCoordinates);
+
+    return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(updateCoordinates);
+      chart.unsubscribeCrosshairMove(updateCoordinates);
+    };
   }, [positionsData, ordersData, symbol]);
 
   // Handle global mouse events for dragging
@@ -308,25 +331,11 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
       const rect = container.getBoundingClientRect();
       const y = e.clientY - rect.top;
 
-      // Calculate price from Y coordinate
+      // Calculate price from Y coordinate using chart's built-in method
       let newPrice: number | null = null;
       try {
-        const seriesData = candlestickSeriesRef.current?.data();
-        if (seriesData && seriesData.length > 0) {
-          // Find min/max prices
-          let minPrice = Infinity;
-          let maxPrice = -Infinity;
-          (seriesData as any[]).forEach((candle: any) => {
-            if (candle.low < minPrice) minPrice = candle.low;
-            if (candle.high > maxPrice) maxPrice = candle.high;
-          });
-
-          if (minPrice !== Infinity && maxPrice !== -Infinity) {
-            const chartHeight = rect.height;
-            const priceRange = maxPrice - minPrice;
-            const priceRatio = (y - 20) / (chartHeight - 40);
-            newPrice = maxPrice - (priceRatio * priceRange);
-          }
+        if (candlestickSeriesRef.current) {
+          newPrice = candlestickSeriesRef.current.coordinateToPrice(y);
         }
       } catch (error) {
         console.error('Error calculating price from coordinate:', error);
@@ -416,32 +425,55 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
       )}
       <div ref={chartContainerRef} className="rounded-lg" style={{ cursor: draggingOrder ? 'grabbing' : 'default' }} />
 
-      {/* Close/Cancel buttons for positions - integrated into price axis */}
+      {/* Close/Cancel buttons for positions - integrated into price line */}
       {positionsData?.success && positionsData.positions.map((position: any) => {
         if (position.symbol !== symbol) return null;
 
-        const yCoord = priceCoordinates.get(`position-${position.id}`);
+        // Calculate Y coordinate directly from price for real-time accuracy
+        let yCoord = priceCoordinates.get(`position-${position.id}`);
+        if (!yCoord && candlestickSeriesRef.current) {
+          const entryPrice = Number(position.avgEntryPrice);
+          yCoord = candlestickSeriesRef.current.priceToCoordinate(entryPrice) ?? undefined;
+        }
         if (!yCoord) return null;
 
         const chartWidth = chartContainerRef.current?.getBoundingClientRect().width || 0;
+        const priceAxisWidth = 65; // Width of price axis on right
+
+        // Calculate text width based on title: "LONG/SHORT X @ $XXXX.XX | P&L: +$XXX.XX"
+        const isLong = position.quantity > 0;
+        const entryPrice = Number(position.avgEntryPrice);
+        const quantity = Math.abs(position.quantity);
+        const titleText = `${isLong ? "LONG" : "SHORT"} ${quantity} @ $${entryPrice.toFixed(2)} | P&L: +$000.00`;
+        const charWidth = 7; // Approximate pixels per character
+        const textWidth = titleText.length * charWidth;
+        const cancelPadding = 12; // Larger padding between text and X
+
+        // Position close button just after text ends, before price axis
+        const textEndX = chartWidth - priceAxisWidth - 25; // Text ends before price axis
+        const closeButtonX = textEndX + cancelPadding; // X with larger padding after text
 
         return (
-          <button
-            key={`position-close-${position.id}`}
-            onClick={() => handleClosePosition(position.symbol)}
-            className="absolute z-[100] flex h-5 w-5 items-center justify-center rounded border border-amber-500/80 bg-amber-500/30 text-amber-300 backdrop-blur-sm transition-all hover:scale-110 hover:bg-amber-500/50"
+          <div
+            key={`position-controls-${position.id}`}
+            className="absolute z-[100] flex items-center"
             style={{
-              top: `${yCoord - 10}px`, // Adjust to center on line
-              left: `${chartWidth - 70}px`,
+              top: `${yCoord - 10}px`,
+              left: `${closeButtonX}px`,
             }}
-            title="Close Position"
           >
-            <X className="h-3 w-3" />
-          </button>
+            <button
+              onClick={() => handleClosePosition(position.symbol)}
+              className="flex h-5 w-5 items-center justify-center rounded border border-amber-500/80 bg-amber-500/30 text-amber-300 backdrop-blur-sm transition-all hover:scale-110 hover:bg-amber-500/50"
+              title="Close Position"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
         );
       })}
 
-      {/* Drag handles for orders - integrated into price axis */}
+      {/* Drag handles and cancel buttons for orders - inline with price line */}
       {ordersData?.success && ordersData.orders.map((order: any) => {
         if (order.symbol !== symbol) return null;
 
@@ -451,19 +483,37 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
         const limitPrice = order.limitPrice ? Number(order.limitPrice) : null;
         const stopPrice = order.stopPrice ? Number(order.stopPrice) : null;
         const priceType = limitPrice ? 'limit' : 'stop';
+        const displayPrice = limitPrice || stopPrice || 0;
 
         const chartWidth = chartContainerRef.current?.getBoundingClientRect().width || 0;
+        const priceAxisWidth = 65; // Width of price axis on right
+
+        // Calculate text width based on title format
+        const titleText = limitPrice
+          ? `${order.orderType.toUpperCase()} ${order.side.toUpperCase()} ${order.quantity} @ ${displayPrice.toFixed(2)}`
+          : `STOP @ ${displayPrice.toFixed(2)}`;
+        const charWidth = 7; // Approximate pixels per character
+        const textWidth = titleText.length * charWidth;
+        const movePadding = -30; // Small padding between ::: and text
+        const cancelPadding = 25; // Larger padding between text and X
+        const dragHandleWidth = 24; // Width of ::: button
+
+        // Position: [:::][padding][---TEXT---][padding][X][price axis]
+        const textEndX = chartWidth - priceAxisWidth - 45; // Text ends before price axis
+        const textStartX = textEndX - textWidth;
+        const dragHandleX = textStartX - movePadding - dragHandleWidth; // ::: with small padding before text
+        const cancelButtonX = textEndX + cancelPadding; // X with larger padding after text
 
         return (
           <>
-            {/* Drag handle on left side of price info */}
+            {/* Drag handle on LEFT of text */}
             <div
               key={`order-drag-${order.id}`}
-              className="absolute z-[100] flex h-5 w-8 cursor-grab items-center justify-center rounded border border-cyan-500/80 bg-cyan-500/30 text-cyan-300 backdrop-blur-sm transition-all hover:bg-cyan-500/50 active:cursor-grabbing"
+              className="absolute z-[100] flex h-5 w-6 cursor-grab items-center justify-center rounded border border-cyan-500/80 bg-cyan-500/30 text-cyan-300 backdrop-blur-sm transition-all hover:bg-cyan-500/50 active:cursor-grabbing"
               title="Drag to move order"
               style={{
                 top: `${yCoord - 10}px`,
-                left: `${chartWidth - 140}px`, // Left side of price axis
+                left: `${dragHandleX}px`,
               }}
               onMouseDown={(e) => {
                 e.preventDefault();
@@ -487,7 +537,7 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
               <span className="text-[10px] font-bold">:::</span>
             </div>
 
-            {/* Cancel button on right side of price info */}
+            {/* Cancel button on RIGHT of text */}
             <button
               key={`order-cancel-${order.id}`}
               onClick={() => handleCancelOrder(order.id)}
@@ -495,7 +545,7 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
               title="Cancel Order"
               style={{
                 top: `${yCoord - 10}px`,
-                left: `${chartWidth - 75}px`, // Right side of price axis
+                left: `${cancelButtonX}px`,
               }}
             >
               <X className="h-3 w-3" />
