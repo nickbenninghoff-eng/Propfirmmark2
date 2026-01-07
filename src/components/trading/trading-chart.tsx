@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { createChart, ColorType, IChartApi, ISeriesApi } from "lightweight-charts";
-import { useMarketPrice, usePositions, useOrders, useUpdateOrder, useCancelOrder, useClosePosition } from "@/hooks/use-trading-data";
+import { useMarketPrice, usePositions, useOrders, useUpdateOrder, useCancelOrder, useClosePosition, useSubmitOrder } from "@/hooks/use-trading-data";
 import { toast } from "sonner";
 import { X, GripVertical } from "lucide-react";
 
@@ -20,6 +20,10 @@ interface PriceLineLabelProps {
   onDragStart?: (e: React.MouseEvent) => void;
   isDraggable?: boolean;
   closeTitle: string;
+  // TP/SL props for positions
+  showTPSL?: boolean;
+  onTPDragStart?: (e: React.MouseEvent) => void;
+  onSLDragStart?: (e: React.MouseEvent) => void;
 }
 
 function PriceLineLabel({
@@ -29,7 +33,10 @@ function PriceLineLabel({
   onClose,
   onDragStart,
   isDraggable = false,
-  closeTitle
+  closeTitle,
+  showTPSL = false,
+  onTPDragStart,
+  onSLDragStart,
 }: PriceLineLabelProps) {
   return (
     <div
@@ -39,6 +46,30 @@ function PriceLineLabel({
         right: '70px', // Position from right edge, before price axis
       }}
     >
+      {/* TP/SL buttons - only for positions */}
+      {showTPSL && (
+        <>
+          {/* Take Profit button */}
+          <div
+            className="flex h-5 w-7 cursor-grab items-center justify-center rounded-l border border-r-0 bg-black/60 backdrop-blur-sm transition-all hover:bg-emerald-500/30 active:cursor-grabbing"
+            style={{ borderColor: '#10b981' }}
+            title="Drag to set Take Profit"
+            onMouseDown={onTPDragStart}
+          >
+            <span className="text-[9px] font-bold text-emerald-400">TP</span>
+          </div>
+          {/* Stop Loss button */}
+          <div
+            className="flex h-5 w-7 cursor-grab items-center justify-center border border-r-0 bg-black/60 backdrop-blur-sm transition-all hover:bg-red-500/30 active:cursor-grabbing"
+            style={{ borderColor: '#ef4444' }}
+            title="Drag to set Stop Loss"
+            onMouseDown={onSLDragStart}
+          >
+            <span className="text-[9px] font-bold text-red-400">SL</span>
+          </div>
+        </>
+      )}
+
       {/* Drag handle - only for orders */}
       {isDraggable && onDragStart && (
         <div
@@ -53,12 +84,12 @@ function PriceLineLabel({
 
       {/* Label text */}
       <div
-        className={`flex h-5 items-center px-2 text-xs font-medium backdrop-blur-sm ${isDraggable ? '' : 'rounded-l'}`}
+        className={`flex h-5 items-center px-2 text-xs font-medium backdrop-blur-sm ${isDraggable || showTPSL ? '' : 'rounded-l'}`}
         style={{
           backgroundColor: 'rgba(0,0,0,0.7)',
           borderTop: `1px solid ${labelColor}`,
           borderBottom: `1px solid ${labelColor}`,
-          borderLeft: isDraggable ? 'none' : `1px solid ${labelColor}`,
+          borderLeft: (isDraggable || showTPSL) ? 'none' : `1px solid ${labelColor}`,
           color: labelColor,
         }}
       >
@@ -84,6 +115,13 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
   const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [draggingOrder, setDraggingOrder] = useState<{orderId: string, priceType: 'limit' | 'stop'} | null>(null);
+  const [draggingTPSL, setDraggingTPSL] = useState<{
+    positionId: string;
+    type: 'tp' | 'sl';
+    entryPrice: number;
+    quantity: number;
+    isLong: boolean;
+  } | null>(null);
   const [dragY, setDragY] = useState<number | null>(null);
   const lastCandleRef = useRef<any>(null);
   const priceLinesRef = useRef<any[]>([]);
@@ -95,6 +133,7 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
   const updateOrderMutation = useUpdateOrder();
   const cancelOrderMutation = useCancelOrder();
   const closePositionMutation = useClosePosition();
+  const submitOrderMutation = useSubmitOrder();
 
   // Get Y coordinate for a price - called during render for real-time accuracy
   const getYCoordinate = useCallback((price: number): number | null => {
@@ -186,20 +225,57 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
     }
   }, [symbol]);
 
-  // Update last candle with real-time price
+  // Update last candle with real-time price and handle candle closing
   useEffect(() => {
     if (!candlestickSeriesRef.current || !priceData?.success || !lastCandleRef.current) {
       return;
     }
 
     const currentPrice = Number(priceData.price);
-    const lastCandle = lastCandleRef.current;
+    let lastCandle = lastCandleRef.current;
+    const now = Math.floor(Date.now() / 1000);
+    const candleIntervalSeconds = 5 * 60; // 5 minute candles
+
+    // Catch up: create new candles if we're behind
+    // This handles cases where the chart was loaded with old candle timestamps
+    while (now >= lastCandle.time + candleIntervalSeconds) {
+      const newCandleTime = lastCandle.time + candleIntervalSeconds;
+
+      // Create new candle starting from previous candle's close (no gap)
+      const newCandle = {
+        time: newCandleTime,
+        open: lastCandle.close,
+        high: lastCandle.close,
+        low: lastCandle.close,
+        close: lastCandle.close,
+      };
+
+      candlestickSeriesRef.current.update(newCandle);
+      lastCandle = newCandle;
+      lastCandleRef.current = newCandle;
+    }
+
+    // Update the current candle with price, but cap the range
+    // Max range ~6 points for ES (matches typical 5-min historical candle range)
+    const maxRange = 6;
+    let newHigh = Math.max(lastCandle.high, currentPrice);
+    let newLow = Math.min(lastCandle.low, currentPrice);
+
+    // Cap the range if it's getting too large
+    if (newHigh - newLow > maxRange) {
+      // Keep the side closer to current price, cap the other
+      if (currentPrice - newLow > newHigh - currentPrice) {
+        newLow = newHigh - maxRange;
+      } else {
+        newHigh = newLow + maxRange;
+      }
+    }
 
     const updatedCandle = {
       ...lastCandle,
       close: currentPrice,
-      high: Math.max(lastCandle.high, currentPrice),
-      low: Math.min(lastCandle.low, currentPrice),
+      high: newHigh,
+      low: newLow,
     };
 
     candlestickSeriesRef.current.update(updatedCandle);
@@ -294,7 +370,7 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
     };
   }, []);
 
-  // Handle global mouse events for dragging
+  // Handle global mouse events for order dragging
   useEffect(() => {
     if (!draggingOrder || !chartRef.current || !chartContainerRef.current) return;
 
@@ -367,9 +443,145 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
     };
   }, [draggingOrder, accountId, updateOrderMutation]);
 
-  // Handle closing position
+  // Handle global mouse events for TP/SL dragging
+  useEffect(() => {
+    if (!draggingTPSL || !chartRef.current || !chartContainerRef.current) return;
+
+    const container = chartContainerRef.current;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      setDragY(y);
+      e.preventDefault();
+    };
+
+    const handleMouseUp = async (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+
+      let targetPrice: number | null = null;
+      try {
+        if (candlestickSeriesRef.current) {
+          targetPrice = candlestickSeriesRef.current.coordinateToPrice(y);
+        }
+      } catch (error) {
+        console.error('Error calculating price from coordinate:', error);
+      }
+
+      if (targetPrice) {
+        const { type, entryPrice, quantity, isLong } = draggingTPSL;
+
+        // Enforce directional rules
+        // For LONG: TP must be above entry, SL must be below entry
+        // For SHORT: TP must be below entry, SL must be above entry
+        let isValidPrice = false;
+        if (type === 'tp') {
+          isValidPrice = isLong ? (targetPrice > entryPrice) : (targetPrice < entryPrice);
+        } else {
+          isValidPrice = isLong ? (targetPrice < entryPrice) : (targetPrice > entryPrice);
+        }
+
+        if (!isValidPrice) {
+          const direction = isLong ? 'long' : 'short';
+          const requirement = type === 'tp'
+            ? (isLong ? 'above' : 'below')
+            : (isLong ? 'below' : 'above');
+          toast.error(`Take Profit must be ${type === 'tp' ? requirement : ''} and Stop Loss must be ${type === 'sl' ? requirement : ''} entry price for ${direction} positions`);
+        } else {
+          // Verify position still exists before creating order
+          const positionStillExists = positionsData?.success &&
+            positionsData.positions.some((p: any) =>
+              p.symbol === symbol && p.quantity !== 0
+            );
+
+          if (!positionStillExists) {
+            toast.error("Position was closed while dragging. Order not created.");
+          } else {
+            // Create the order
+            try {
+              // For TP: limit order to close the position (opposite side)
+              // For SL: stop order to close the position (opposite side)
+              const orderData = {
+                accountId,
+                symbol,
+                orderType: type === 'tp' ? 'limit' : 'stop',
+                side: isLong ? 'sell' : 'buy', // Opposite of position to close it
+                quantity,
+                ...(type === 'tp' ? { limitPrice: targetPrice } : { stopPrice: targetPrice }),
+                timeInForce: 'gtc', // Good till cancelled
+              };
+
+              await submitOrderMutation.mutateAsync(orderData);
+              toast.success(`${type === 'tp' ? 'Take Profit' : 'Stop Loss'} set at $${targetPrice.toFixed(2)}`);
+            } catch (error: any) {
+              toast.error(error.message || `Failed to set ${type === 'tp' ? 'Take Profit' : 'Stop Loss'}`);
+            }
+          }
+        }
+      }
+
+      setDraggingTPSL(null);
+      setDragY(null);
+
+      if (chartRef.current) {
+        chartRef.current.applyOptions({
+          handleScroll: true,
+          handleScale: true,
+        });
+      }
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+
+      if (chartRef.current) {
+        chartRef.current.applyOptions({
+          handleScroll: true,
+          handleScale: true,
+        });
+      }
+    };
+  }, [draggingTPSL, accountId, symbol, submitOrderMutation, positionsData]);
+
+  // Handle closing position - also cancels any TP/SL orders
   const handleClosePosition = async (posSymbol: string) => {
     try {
+      // First, find and cancel any TP/SL orders for this position
+      // TP/SL orders are on the opposite side of the position
+      if (ordersData?.success && positionsData?.success) {
+        const position = positionsData.positions.find((p: any) => p.symbol === posSymbol);
+        if (position) {
+          const isLong = position.quantity > 0;
+          const opposingSide = isLong ? 'sell' : 'buy';
+
+          // Find orders that match: same symbol, opposite side (these are TP/SL orders)
+          const tpslOrders = ordersData.orders.filter((order: any) =>
+            order.symbol === posSymbol &&
+            order.side === opposingSide &&
+            ['pending', 'submitted', 'working', 'partial'].includes(order.status)
+          );
+
+          // Cancel each TP/SL order
+          for (const order of tpslOrders) {
+            try {
+              await cancelOrderMutation.mutateAsync({ orderId: order.id, accountId });
+            } catch (e) {
+              console.error(`Failed to cancel order ${order.id}:`, e);
+            }
+          }
+
+          if (tpslOrders.length > 0) {
+            toast.success(`Cancelled ${tpslOrders.length} TP/SL order(s)`);
+          }
+        }
+      }
+
+      // Now close the position
       await closePositionMutation.mutateAsync({ accountId, symbol: posSymbol });
       toast.success(`Closed position for ${posSymbol}`);
     } catch (error: any) {
@@ -405,8 +617,40 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
     }
   };
 
+  // Handle drag start for TP/SL
+  const handleTPSLDragStart = (
+    positionId: string,
+    type: 'tp' | 'sl',
+    entryPrice: number,
+    quantity: number,
+    isLong: boolean
+  ) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = chartContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const y = e.clientY - rect.top;
+    setDraggingTPSL({ positionId, type, entryPrice, quantity, isLong });
+    setDragY(y);
+
+    if (chartRef.current) {
+      chartRef.current.applyOptions({
+        handleScroll: false,
+        handleScale: false,
+      });
+    }
+  };
+
   // Calculate current price for P&L
   const currentPrice = priceData?.success ? Number(priceData.price) : null;
+
+  // Determine drag line color based on what's being dragged
+  const getDragLineColor = () => {
+    if (draggingTPSL) {
+      return draggingTPSL.type === 'tp' ? '#10b981' : '#ef4444';
+    }
+    return '#06b6d4'; // Default cyan for order dragging
+  };
 
   return (
     <div className="relative">
@@ -415,7 +659,7 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
           <div className="text-white/60">Loading chart...</div>
         </div>
       )}
-      <div ref={chartContainerRef} className="rounded-lg" style={{ cursor: draggingOrder ? 'grabbing' : 'default' }} />
+      <div ref={chartContainerRef} className="rounded-lg" style={{ cursor: (draggingOrder || draggingTPSL) ? 'grabbing' : 'default' }} />
 
       {/* Unified Position Labels */}
       {positionsData?.success && currentPrice && positionsData.positions.map((position: any) => {
@@ -435,7 +679,6 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
         const priceDiff = isLong ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
         const unrealizedPnL = priceDiff * tickValue * quantity;
         const pnlSign = unrealizedPnL >= 0 ? "+" : "";
-        const pnlColor = unrealizedPnL >= 0 ? "#10b981" : "#ef4444";
 
         const labelText = `${isLong ? "LONG" : "SHORT"} ${quantity} @ $${entryPrice.toFixed(2)} | P&L: ${pnlSign}$${unrealizedPnL.toFixed(2)}`;
         const labelColor = isLong ? "#10b981" : "#ef4444";
@@ -448,6 +691,9 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
             labelColor={labelColor}
             onClose={() => handleClosePosition(position.symbol)}
             closeTitle="Close Position"
+            showTPSL={true}
+            onTPDragStart={handleTPSLDragStart(position.id, 'tp', entryPrice, quantity, isLong)}
+            onSLDragStart={handleTPSLDragStart(position.id, 'sl', entryPrice, quantity, isLong)}
           />
         );
       })}
@@ -488,11 +734,12 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
       })}
 
       {/* Drag helper - visual line while dragging */}
-      {draggingOrder && dragY !== null && (
+      {(draggingOrder || draggingTPSL) && dragY !== null && (
         <div
-          className="pointer-events-none absolute left-0 right-0 border-t-2 border-dashed border-cyan-400 z-50"
+          className="pointer-events-none absolute left-0 right-0 border-t-2 border-dashed z-50"
           style={{
             top: `${dragY}px`,
+            borderColor: getDragLineColor(),
           }}
         />
       )}

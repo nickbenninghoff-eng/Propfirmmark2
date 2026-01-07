@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MarketDataGenerator, CONTRACTS } from "@/lib/mock-data/market-data-generator";
+import { getMockExecutionEngine } from "@/server/services/mock-execution-engine";
 
 export async function GET(request: NextRequest) {
   try {
@@ -16,9 +17,33 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Get the current price from the execution engine (singleton) FIRST
+    const executionEngine = getMockExecutionEngine();
+    const currentPrice = executionEngine.getCurrentPrice(symbol);
+
     // Generate candles
     const generator = new MarketDataGenerator(symbol);
     const candles = generator.generateHistoricalCandles(intervalMinutes, count);
+
+    // Shift ALL candles to match the current price
+    // This preserves candlestick patterns while aligning to the execution engine's price
+    if (candles.length > 0) {
+      const lastCandle = candles[candles.length - 1];
+      const priceOffset = currentPrice - lastCandle.close;
+      const tickSize = CONTRACTS[symbol].tickSize;
+
+      // Apply offset to all candles
+      for (const candle of candles) {
+        candle.open = Math.round((candle.open + priceOffset) / tickSize) * tickSize;
+        candle.high = Math.round((candle.high + priceOffset) / tickSize) * tickSize;
+        candle.low = Math.round((candle.low + priceOffset) / tickSize) * tickSize;
+        candle.close = Math.round((candle.close + priceOffset) / tickSize) * tickSize;
+      }
+
+      // Ensure the very last candle closes exactly at current price
+      const finalCandle = candles[candles.length - 1];
+      finalCandle.close = currentPrice;
+    }
 
     return NextResponse.json({
       success: true,

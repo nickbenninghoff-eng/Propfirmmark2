@@ -28,7 +28,7 @@ interface Execution {
 export class MockExecutionEngine {
   private generators: Map<string, MarketDataGenerator> = new Map();
   private priceCache: Map<string, { price: number; timestamp: number }> = new Map();
-  private readonly PRICE_CACHE_MS = 100; // Cache price for 100ms
+  private readonly PRICE_CACHE_MS = 2000; // Cache price for 2 seconds to ensure consistency
 
   /**
    * Get or create market data generator for a symbol

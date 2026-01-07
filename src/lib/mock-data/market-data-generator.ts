@@ -217,8 +217,8 @@ export class MarketDataGenerator {
     this.barsSinceTrendChange++;
 
     // Volatility scaled for realistic tick-by-tick movement
-    // Adjusted to generate 0.5-2 ticks per update on average
-    const tickVolatility = this.contract.volatility / 200; // Balanced per-tick volatility
+    // Balanced for visible price action while keeping candle ranges reasonable
+    const tickVolatility = this.contract.volatility / 275; // Moderate price movement
 
     // Update peak/trough tracking
     if (this.currentPrice > this.peakPrice) {
@@ -228,47 +228,26 @@ export class MarketDataGenerator {
       this.troughPrice = this.currentPrice;
     }
 
-    // Mean reversion logic - pull back toward base price
-    const basePrice = this.contract.basePrice;
-    const distanceFromBase = (this.currentPrice - basePrice) / basePrice;
+    // Simplified price movement - no mean reversion to base price
+    // This keeps price stable around wherever it currently is
+    // Trend changes occasionally for realistic movement
 
-    // Calculate move away from base as percentage
-    const meanReversionForce = -distanceFromBase * 0.3; // Pull back toward mean
-
-    // Trend exhaustion - reverse after extended moves
-    const trendExtension = this.barsSinceTrendChange / 20; // Trend gets tired after ~20 bars
-    let trendReversalChance = 0.05; // Base 5% chance
-
-    // Increase reversal chance based on distance from mean and trend age
-    if (Math.abs(distanceFromBase) > 0.015) { // More than 1.5% from base
-      trendReversalChance += Math.abs(distanceFromBase) * 2; // Higher chance to reverse
-    }
-
-    if (this.barsSinceTrendChange > 15) {
-      trendReversalChance += trendExtension * 0.5; // Increase reversal chance with age
-    }
-
-    // Trend change logic
-    if (Math.random() < trendReversalChance) {
-      // Reverse or change trend
-      if (Math.abs(distanceFromBase) > 0.01) {
-        // Force reversal toward mean if far from base
-        this.trend = distanceFromBase > 0 ? -1 : 1;
-      } else {
-        // Random new trend
-        this.trend = (Math.random() - 0.5) * 2;
-      }
+    // Small chance to change trend direction
+    if (Math.random() < 0.03) {
+      this.trend = (Math.random() - 0.5) * 1.5; // Weaker trend (-0.75 to 0.75)
       this.barsSinceTrendChange = 0;
-      this.peakPrice = this.currentPrice;
-      this.troughPrice = this.currentPrice;
     }
 
-    // Calculate price movement
-    const trendComponent = this.trend * tickVolatility * 0.5;
-    const randomComponent = (Math.random() - 0.5) * 2 * tickVolatility;
-    const meanReversionComponent = meanReversionForce * tickVolatility;
+    // Trend weakens over time
+    if (this.barsSinceTrendChange > 10) {
+      this.trend *= 0.95; // Decay trend
+    }
 
-    const totalMove = (trendComponent + randomComponent + meanReversionComponent) * this.currentPrice;
+    // Calculate price movement - mostly random with weak trend
+    const trendComponent = this.trend * tickVolatility * 0.3;
+    const randomComponent = (Math.random() - 0.5) * 2 * tickVolatility;
+
+    const totalMove = (trendComponent + randomComponent) * this.currentPrice;
 
     // Update price
     this.currentPrice += totalMove;

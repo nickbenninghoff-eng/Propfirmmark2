@@ -4,8 +4,8 @@
  */
 
 import { db } from "@/lib/db";
-import { orders, executions, orderRuleChecks, tradingAccounts, accountEquitySnapshots } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { orders, executions, orderRuleChecks, tradingAccounts, accountEquitySnapshots, positions } from "@/lib/db/schema";
+import { eq, and, inArray } from "drizzle-orm";
 import { validateOrder, type OrderValidationRequest } from "./order-validation-service";
 import { getMockExecutionEngine } from "./mock-execution-engine";
 import { updatePosition } from "./position-service";
@@ -211,9 +211,11 @@ export async function executeMarketOrder(orderId: string): Promise<any> {
 }
 
 /**
- * Execute a limit order (mark as working)
+ * Execute a limit order - mark as working (order monitor will handle fills)
  */
 export async function executeLimitOrder(orderId: string): Promise<any> {
+  // Mark as working - the order monitor service will check for fills
+  // This prevents premature fills due to price cache timing differences
   await db
     .update(orders)
     .set({
@@ -472,4 +474,56 @@ async function updateAccountOrderCount(accountId: string): Promise<void> {
       openOrdersCount: openOrders.length,
     })
     .where(eq(tradingAccounts.id, accountId));
+}
+
+/**
+ * Cancel related orders when a position is closed (OCO behavior)
+ * This cancels any remaining TP/SL orders on the same symbol
+ */
+async function cancelRelatedOrdersOnPositionClose(
+  accountId: string,
+  symbol: string,
+  filledOrderId: string
+): Promise<number> {
+  // Check if the position is now closed
+  const position = await db.query.positions.findFirst({
+    where: and(
+      eq(positions.tradingAccountId, accountId),
+      eq(positions.symbol, symbol),
+      eq(positions.isOpen, true)
+    ),
+  });
+
+  // If position still exists and is open, don't cancel other orders
+  if (position && position.quantity !== 0) {
+    return 0;
+  }
+
+  // Position is closed - cancel all other working orders on this symbol
+  const relatedOrders = await db.query.orders.findMany({
+    where: and(
+      eq(orders.tradingAccountId, accountId),
+      eq(orders.symbol, symbol),
+      inArray(orders.status, ["working", "submitted", "pending"])
+    ),
+  });
+
+  let cancelledCount = 0;
+  for (const order of relatedOrders) {
+    // Don't cancel the order that just filled
+    if (order.id === filledOrderId) continue;
+
+    await db
+      .update(orders)
+      .set({
+        status: "cancelled",
+        closedAt: new Date(),
+        notes: (order.notes || "") + " [OCO: Cancelled - position closed]",
+      })
+      .where(eq(orders.id, order.id));
+
+    cancelledCount++;
+  }
+
+  return cancelledCount;
 }
