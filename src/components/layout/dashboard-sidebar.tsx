@@ -13,6 +13,7 @@ import {
   LogOut,
   ShoppingCart,
   HelpCircle,
+  LineChart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -22,10 +23,12 @@ import { toast } from "sonner";
 
 const mainLinks = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/trading", label: "Trading", icon: LineChart },
   { href: "/accounts", label: "My Accounts", icon: Wallet },
   { href: "/accounts/purchase", label: "Purchase Account", icon: ShoppingCart },
   { href: "/statistics", label: "Statistics", icon: BarChart3 },
   { href: "/payouts", label: "Payouts", icon: DollarSign },
+  { href: "/test-data", label: "Test Data", icon: TrendingUp },
 ];
 
 const bottomLinks = [
@@ -67,9 +70,19 @@ export function DashboardSidebar() {
         </div>
         <nav className="space-y-1">
           {mainLinks.map((link) => {
-            const isActive =
-              pathname === link.href ||
-              (link.href !== "/dashboard" && pathname.startsWith(link.href));
+            // Exact match for most routes
+            let isActive = pathname === link.href;
+
+            // Special handling for /accounts - only highlight if on /accounts or /accounts/[id], but NOT /accounts/purchase
+            if (link.href === "/accounts" && pathname.startsWith("/accounts/")) {
+              isActive = pathname === "/accounts" || (pathname.startsWith("/accounts/") && !pathname.startsWith("/accounts/purchase"));
+            }
+
+            // Special handling for /trading - highlight if on /trading or /trading/[accountId]
+            if (link.href === "/trading" && pathname.startsWith("/trading")) {
+              isActive = true;
+            }
+
             const Icon = link.icon;
 
             return (

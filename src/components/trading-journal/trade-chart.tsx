@@ -11,70 +11,47 @@ interface TradeChartProps {
   direction: "long" | "short";
 }
 
-// Generate mock candlestick data for the trading day
-function generateMockData(
-  entryPrice: number,
-  exitPrice: number,
-  entryTime: Date,
-  exitTime: Date,
-  direction: "long" | "short"
-) {
-  const data = [];
+// Extract base symbol from futures contract symbol (e.g., "ESH25" -> "ES", "NQH25" -> "NQ")
+function extractBaseSymbol(symbol: string): string {
+  // Common futures base symbols
+  const futuresSymbols = ['ES', 'NQ', 'YM', 'CL', 'GC'];
 
-  // Create timestamps from market open (9:30 AM) to close (4:00 PM)
-  const marketOpen = new Date(entryTime);
-  marketOpen.setHours(9, 30, 0, 0);
-
-  const marketClose = new Date(entryTime);
-  marketClose.setHours(16, 0, 0, 0);
-
-  // Generate 5-minute bars
-  const interval = 5 * 60 * 1000; // 5 minutes in ms
-  let currentTime = marketOpen.getTime();
-
-  // Calculate price range and volatility
-  const priceRange = Math.abs(exitPrice - entryPrice);
-  const volatility = priceRange * 0.3; // 30% of the move for realistic noise
-
-  let currentPrice = entryPrice;
-  const entryTimestamp = entryTime.getTime();
-  const exitTimestamp = exitTime.getTime();
-
-  while (currentTime <= marketClose.getTime()) {
-    const timestamp = currentTime / 1000; // Convert to seconds for TradingView
-
-    // Add realistic price movement
-    const randomMove = (Math.random() - 0.5) * volatility * 0.1;
-
-    // Trend towards exit price as we approach exit time
-    let trendMove = 0;
-    if (currentTime >= entryTimestamp && currentTime <= exitTimestamp) {
-      const progress = (currentTime - entryTimestamp) / (exitTimestamp - entryTimestamp);
-      const targetPrice = entryPrice + (exitPrice - entryPrice) * progress;
-      trendMove = (targetPrice - currentPrice) * 0.3;
+  for (const baseSymbol of futuresSymbols) {
+    if (symbol.startsWith(baseSymbol)) {
+      return baseSymbol;
     }
-
-    currentPrice += randomMove + trendMove;
-
-    // Generate OHLC
-    const open = currentPrice;
-    const high = open + Math.abs(randomMove) * 1.5;
-    const low = open - Math.abs(randomMove) * 1.5;
-    const close = open + randomMove + trendMove;
-
-    data.push({
-      time: timestamp,
-      open: Number(open.toFixed(2)),
-      high: Number(high.toFixed(2)),
-      low: Number(low.toFixed(2)),
-      close: Number(close.toFixed(2)),
-    });
-
-    currentPrice = close;
-    currentTime += interval;
   }
 
-  return data;
+  // If no match, return first 2 characters as fallback
+  return symbol.substring(0, 2).toUpperCase();
+}
+
+// Fetch realistic mock candlestick data from the API
+async function fetchMockData(
+  symbol: string,
+  entryTime: Date,
+  exitTime: Date
+): Promise<any[]> {
+  try {
+    // Extract base symbol for mock data API
+    const baseSymbol = extractBaseSymbol(symbol);
+
+    // Fetch mock data for the trading day
+    const response = await fetch(
+      `/api/mock-data/candles?symbol=${baseSymbol}&interval=5&count=78`
+    );
+
+    if (!response.ok) {
+      console.error("Failed to fetch mock data");
+      return [];
+    }
+
+    const data = await response.json();
+    return data.candles || [];
+  } catch (error) {
+    console.error("Error fetching mock data:", error);
+    return [];
+  }
 }
 
 export function TradeChart({ symbol, entryPrice, exitPrice, entryTime, exitTime, direction }: TradeChartProps) {
@@ -130,32 +107,37 @@ export function TradeChart({ symbol, entryPrice, exitPrice, entryTime, exitTime,
         wickDownColor: "#ef4444",
       });
 
-      // Generate and set mock data
-      const mockData = generateMockData(entryPrice, exitPrice, entryTime, exitTime, direction);
-      candlestickSeries.setData(mockData);
+      // Fetch and set mock data
+      fetchMockData(symbol, entryTime, exitTime).then((mockData) => {
+        if (mockData.length > 0 && candlestickSeries) {
+          candlestickSeries.setData(mockData);
 
-      // Add markers directly to candlestick series (v4 API)
-      const markers = [
-        {
-          time: Math.floor(entryTime.getTime() / 1000),
-          position: direction === "long" ? "belowBar" : "aboveBar",
-          color: "#10b981",
-          shape: direction === "long" ? "arrowUp" : "arrowDown",
-          text: `Entry @ $${entryPrice.toFixed(2)}`,
-        },
-        {
-          time: Math.floor(exitTime.getTime() / 1000),
-          position: direction === "long" ? "aboveBar" : "belowBar",
-          color: "#ef4444",
-          shape: direction === "long" ? "arrowDown" : "arrowUp",
-          text: `Exit @ $${exitPrice.toFixed(2)}`,
-        },
-      ];
+          // Add markers after data is loaded
+          const markers = [
+            {
+              time: Math.floor(entryTime.getTime() / 1000),
+              position: direction === "long" ? "belowBar" : "aboveBar",
+              color: "#10b981",
+              shape: direction === "long" ? "arrowUp" : "arrowDown",
+              text: `Entry @ $${entryPrice.toFixed(2)}`,
+            },
+            {
+              time: Math.floor(exitTime.getTime() / 1000),
+              position: direction === "long" ? "aboveBar" : "belowBar",
+              color: "#ef4444",
+              shape: direction === "long" ? "arrowDown" : "arrowUp",
+              text: `Exit @ $${exitPrice.toFixed(2)}`,
+            },
+          ];
 
-      candlestickSeries.setMarkers(markers);
+          candlestickSeries.setMarkers(markers);
 
-      // Fit content
-      chart.timeScale().fitContent();
+          // Fit content after data and markers are loaded
+          if (chart) {
+            chart.timeScale().fitContent();
+          }
+        }
+      });
 
       // Handle resize
       const handleResize = () => {

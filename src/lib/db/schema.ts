@@ -93,6 +93,34 @@ export const connectionStatusEnum = pgEnum("connection_status", [
   "error",
 ]);
 
+export const orderStatusEnum = pgEnum("order_status", [
+  "pending",
+  "submitted",
+  "working",
+  "partial",
+  "filled",
+  "cancelled",
+  "rejected",
+  "expired",
+]);
+
+export const orderTypeEnum = pgEnum("order_type", [
+  "market",
+  "limit",
+  "stop",
+  "stop_limit",
+  "trailing_stop",
+]);
+
+export const orderSideEnum = pgEnum("order_side", ["buy", "sell"]);
+
+export const timeInForceEnum = pgEnum("time_in_force", [
+  "day",
+  "gtc",
+  "ioc",
+  "fok",
+]);
+
 // Users table
 export const users = pgTable(
   "users",
@@ -267,6 +295,16 @@ export const tradingAccounts = pgTable(
     totalPayouts: decimal("total_payouts", { precision: 12, scale: 2 }).default("0"),
     activatedAt: timestamp("activated_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    // Trading interface fields
+    isSimulated: boolean("is_simulated").notNull().default(true),
+    availableMargin: decimal("available_margin", { precision: 12, scale: 2 }).notNull().default("0"),
+    usedMargin: decimal("used_margin", { precision: 12, scale: 2 }).notNull().default("0"),
+    marginUtilization: decimal("margin_utilization", { precision: 5, scale: 2 }).notNull().default("0"),
+    openPositionsCount: integer("open_positions_count").notNull().default(0),
+    openOrdersCount: integer("open_orders_count").notNull().default(0),
+    dailyPnl: decimal("daily_pnl", { precision: 12, scale: 2 }).notNull().default("0"),
+    dailyLossLimitHit: boolean("daily_loss_limit_hit").notNull().default(false),
+    lastDailyResetAt: timestamp("last_daily_reset_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -328,6 +366,171 @@ export const trades = pgTable(
     index("trades_entry_time_idx").on(table.entryTime),
     index("trades_asset_type_idx").on(table.assetType),
     index("trades_underlying_symbol_idx").on(table.underlyingSymbol),
+  ]
+);
+
+// Orders
+export const orders = pgTable(
+  "orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tradingAccountId: uuid("trading_account_id")
+      .notNull()
+      .references(() => tradingAccounts.id, { onDelete: "cascade" }),
+
+    // Order identification
+    clientOrderId: varchar("client_order_id", { length: 100 }).notNull().unique(),
+    externalOrderId: varchar("external_order_id", { length: 100 }),
+
+    // Order details
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    orderType: orderTypeEnum("order_type").notNull(),
+    side: orderSideEnum("side").notNull(),
+    quantity: integer("quantity").notNull(),
+
+    // Prices
+    limitPrice: decimal("limit_price", { precision: 12, scale: 6 }),
+    stopPrice: decimal("stop_price", { precision: 12, scale: 6 }),
+    trailAmount: decimal("trail_amount", { precision: 12, scale: 6 }),
+    trailPercent: decimal("trail_percent", { precision: 5, scale: 2 }),
+
+    // Execution
+    filledQuantity: integer("filled_quantity").notNull().default(0),
+    remainingQuantity: integer("remaining_quantity").notNull(),
+    avgFillPrice: decimal("avg_fill_price", { precision: 12, scale: 6 }),
+
+    // Status and lifecycle
+    status: orderStatusEnum("status").notNull().default("pending"),
+    timeInForce: timeInForceEnum("time_in_force").notNull().default("day"),
+
+    // Validation and risk
+    preTradeCheckPassed: boolean("pre_trade_check_passed").notNull().default(false),
+    preTradeCheckDetails: jsonb("pre_trade_check_details"),
+    rejectionReason: text("rejection_reason"),
+
+    // Timestamps
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    firstFillAt: timestamp("first_fill_at", { withTimezone: true }),
+    lastFillAt: timestamp("last_fill_at", { withTimezone: true }),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+
+    // Metadata
+    placedFromIp: varchar("placed_from_ip", { length: 45 }),
+    notes: text("notes"),
+  },
+  (table) => [
+    index("orders_account_idx").on(table.tradingAccountId),
+    index("orders_status_idx").on(table.status),
+    index("orders_symbol_idx").on(table.symbol),
+    index("orders_created_at_idx").on(table.createdAt),
+  ]
+);
+
+// Positions
+export const positions = pgTable(
+  "positions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tradingAccountId: uuid("trading_account_id")
+      .notNull()
+      .references(() => tradingAccounts.id, { onDelete: "cascade" }),
+
+    // Position details
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    quantity: integer("quantity").notNull(),
+    avgEntryPrice: decimal("avg_entry_price", { precision: 12, scale: 6 }).notNull(),
+
+    // P&L tracking
+    realizedPnl: decimal("realized_pnl", { precision: 12, scale: 2 }).notNull().default("0"),
+    unrealizedPnl: decimal("unrealized_pnl", { precision: 12, scale: 2 }).notNull().default("0"),
+    totalPnl: decimal("total_pnl", { precision: 12, scale: 2 }).notNull().default("0"),
+
+    // Current market data
+    currentPrice: decimal("current_price", { precision: 12, scale: 6 }),
+    lastUpdated: timestamp("last_updated", { withTimezone: true }).notNull().defaultNow(),
+
+    // Open/Close tracking
+    isOpen: boolean("is_open").notNull().default(true),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+
+    // Metadata
+    totalBought: integer("total_bought").notNull().default(0),
+    totalSold: integer("total_sold").notNull().default(0),
+  },
+  (table) => [
+    index("positions_account_idx").on(table.tradingAccountId),
+    index("positions_symbol_idx").on(table.symbol),
+    index("positions_is_open_idx").on(table.isOpen),
+    index("positions_account_symbol_unique_idx").on(table.tradingAccountId, table.symbol),
+  ]
+);
+
+// Executions
+export const executions = pgTable(
+  "executions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    tradingAccountId: uuid("trading_account_id")
+      .notNull()
+      .references(() => tradingAccounts.id),
+
+    // Execution details
+    executionId: varchar("execution_id", { length: 100 }).notNull().unique(),
+    externalExecutionId: varchar("external_execution_id", { length: 100 }),
+
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    side: orderSideEnum("side").notNull(),
+    quantity: integer("quantity").notNull(),
+    price: decimal("price", { precision: 12, scale: 6 }).notNull(),
+
+    // Fees
+    commission: decimal("commission", { precision: 10, scale: 2 }).default("0"),
+    fees: decimal("fees", { precision: 10, scale: 2 }).default("0"),
+
+    // Simulation metadata
+    isSimulated: boolean("is_simulated").notNull().default(true),
+    simulatedSlippage: decimal("simulated_slippage", { precision: 12, scale: 6 }),
+
+    executedAt: timestamp("executed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("executions_order_idx").on(table.orderId),
+    index("executions_account_idx").on(table.tradingAccountId),
+    index("executions_executed_at_idx").on(table.executedAt),
+  ]
+);
+
+// Order Rule Checks
+export const orderRuleChecks = pgTable(
+  "order_rule_checks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    tradingAccountId: uuid("trading_account_id")
+      .notNull()
+      .references(() => tradingAccounts.id),
+
+    // Check results
+    passed: boolean("passed").notNull(),
+    checkType: varchar("check_type", { length: 50 }).notNull(),
+    checkDetails: jsonb("check_details").notNull(),
+    failureReason: text("failure_reason"),
+
+    // Snapshot of account state at check time
+    accountSnapshot: jsonb("account_snapshot").notNull(),
+
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("rule_checks_order_idx").on(table.orderId),
+    index("rule_checks_account_idx").on(table.tradingAccountId),
   ]
 );
 
@@ -585,6 +788,10 @@ export const tradingAccountsRelations = relations(tradingAccounts, ({ one, many 
   payoutRequests: many(payoutRequests),
   equitySnapshots: many(accountEquitySnapshots),
   brokerConnections: many(externalBrokerConnections),
+  orders: many(orders),
+  positions: many(positions),
+  executions: many(executions),
+  orderRuleChecks: many(orderRuleChecks),
 }));
 
 export const tradesRelations = relations(trades, ({ one }) => ({
@@ -648,6 +855,44 @@ export const externalBrokerConnectionsRelations = relations(externalBrokerConnec
   }),
   tradingAccount: one(tradingAccounts, {
     fields: [externalBrokerConnections.tradingAccountId],
+    references: [tradingAccounts.id],
+  }),
+}));
+
+export const ordersRelations = relations(orders, ({ one, many }) => ({
+  tradingAccount: one(tradingAccounts, {
+    fields: [orders.tradingAccountId],
+    references: [tradingAccounts.id],
+  }),
+  executions: many(executions),
+  ruleChecks: many(orderRuleChecks),
+}));
+
+export const positionsRelations = relations(positions, ({ one }) => ({
+  tradingAccount: one(tradingAccounts, {
+    fields: [positions.tradingAccountId],
+    references: [tradingAccounts.id],
+  }),
+}));
+
+export const executionsRelations = relations(executions, ({ one }) => ({
+  order: one(orders, {
+    fields: [executions.orderId],
+    references: [orders.id],
+  }),
+  tradingAccount: one(tradingAccounts, {
+    fields: [executions.tradingAccountId],
+    references: [tradingAccounts.id],
+  }),
+}));
+
+export const orderRuleChecksRelations = relations(orderRuleChecks, ({ one }) => ({
+  order: one(orders, {
+    fields: [orderRuleChecks.orderId],
+    references: [orders.id],
+  }),
+  tradingAccount: one(tradingAccounts, {
+    fields: [orderRuleChecks.tradingAccountId],
     references: [tradingAccounts.id],
   }),
 }));

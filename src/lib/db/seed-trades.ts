@@ -73,9 +73,9 @@ function generateTrade(accountId: string, index: number) {
   const commission = quantity * 2.50; // $2.50 per contract round trip
   const netPnl = pnl - commission;
 
-  // Entry and exit times (exit 5-120 minutes after entry)
+  // Entry and exit times (exit 30-240 minutes after entry for better chart visualization)
   const entryTime = randomDate(30); // Past 30 days
-  const holdTime = (5 + Math.floor(Math.random() * 115)) * 60 * 1000;
+  const holdTime = (30 + Math.floor(Math.random() * 210)) * 60 * 1000; // 30-240 minutes = 6-48 candles
   const exitTime = new Date(entryTime.getTime() + holdTime);
 
   return {
