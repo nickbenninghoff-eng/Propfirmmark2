@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 import { createCheckoutSession, createResetCheckoutSession } from "@/lib/stripe/checkout";
 import { db } from "@/lib/db";
@@ -19,7 +20,11 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { tierId, accountId, type = "purchase" } = body;
 
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    // Get base URL from request headers (works for any port/host)
+    const headersList = await headers();
+    const host = headersList.get("host") || "localhost:3000";
+    const protocol = headersList.get("x-forwarded-proto") || "http";
+    const baseUrl = `${protocol}://${host}`;
 
     if (type === "purchase") {
       if (!tierId) {
@@ -54,7 +59,7 @@ export async function POST(request: Request) {
         price: Number(tier.price),
         userId: session.user.id,
         userEmail: session.user.email,
-        successUrl: `${baseUrl}/dashboard?checkout=success`,
+        successUrl: `${baseUrl}/api/checkout/verify?session_id={CHECKOUT_SESSION_ID}`,
         cancelUrl: `${baseUrl}/accounts/purchase?checkout=cancelled`,
       });
 
@@ -95,7 +100,7 @@ export async function POST(request: Request) {
         resetPrice: Number(account.tier.resetPrice),
         userId: session.user.id,
         userEmail: session.user.email,
-        successUrl: `${baseUrl}/accounts/${account.id}?reset=success`,
+        successUrl: `${baseUrl}/api/checkout/verify-reset?session_id={CHECKOUT_SESSION_ID}&account_id=${account.id}`,
         cancelUrl: `${baseUrl}/accounts/${account.id}?reset=cancelled`,
       });
 

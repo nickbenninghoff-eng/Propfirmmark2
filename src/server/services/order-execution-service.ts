@@ -199,6 +199,46 @@ export async function executeMarketOrder(orderId: string): Promise<any> {
   });
   await checkAccountRules(order.tradingAccountId);
 
+  // Get current position to update TP/SL orders or cancel if closed
+  // First check for open position
+  const openPosition = await db.query.positions.findFirst({
+    where: and(
+      eq(positions.tradingAccountId, order.tradingAccountId),
+      eq(positions.symbol, order.symbol),
+      eq(positions.isOpen, true)
+    ),
+  });
+
+  console.log(`[Market Order Fill] Order ${order.id} filled. Position check:`, {
+    symbol: order.symbol,
+    orderSide: order.side,
+    realizedPnl: positionResult.realizedPnl,
+    openPositionFound: !!openPosition,
+    openPositionQty: openPosition?.quantity,
+  });
+
+  // Use realizedPnl to determine if this was an entry or exit:
+  // - realizedPnl = 0 means this was a pure entry (opened or added to position)
+  // - realizedPnl != 0 means this closed/reduced a position
+  const wasExitOrder = positionResult.realizedPnl !== 0;
+
+  if (openPosition && openPosition.quantity !== 0) {
+    // Position still exists and is open - update TP/SL order quantities to match current position size
+    const positionQty = Math.abs(openPosition.quantity);
+    const isLong = openPosition.quantity > 0;
+
+    // Always update TP/SL quantities when position is still open (entry or partial exit)
+    console.log(`[Market Order Fill] Position still open with ${positionQty} contracts, updating TP/SL quantities`);
+    await updateTPSLOrderQuantities(order.tradingAccountId, order.symbol, positionQty, isLong);
+  } else if (wasExitOrder) {
+    // This was an exit order AND no open position remains - cancel related orders (OCO)
+    console.log(`[Market Order Fill] Exit order closed position, cancelling related orders (OCO)`);
+    await cancelRelatedOrdersOnPositionClose(order.tradingAccountId, order.symbol, order.id);
+  } else {
+    // This was an entry order but somehow no position found - don't cancel anything
+    console.log(`[Market Order Fill] Entry order but no position found - skipping OCO`);
+  }
+
   // Update open orders count
   await updateAccountOrderCount(order.tradingAccountId);
 
@@ -211,17 +251,114 @@ export async function executeMarketOrder(orderId: string): Promise<any> {
 }
 
 /**
- * Execute a limit order - mark as working (order monitor will handle fills)
+ * Execute a limit order - check for immediate fill or mark as working
  */
 export async function executeLimitOrder(orderId: string): Promise<any> {
+  const order = await getOrder(orderId);
+  if (!order) throw new Error("Order not found");
+
+  const executionEngine = getMockExecutionEngine();
+  const currentPrice = executionEngine.getCurrentPrice(order.symbol);
+  const limitPrice = Number(order.limitPrice);
+
+  console.log(`[executeLimitOrder] Order ${orderId}: side=${order.side}, limitPrice=${limitPrice}, currentPrice=${currentPrice}`);
+
+  // Check if the order should fill immediately
+  const shouldFillImmediately =
+    (order.side === "buy" && currentPrice <= limitPrice) ||
+    (order.side === "sell" && currentPrice >= limitPrice);
+
+  if (shouldFillImmediately) {
+    console.log(`[executeLimitOrder] Order ${orderId} filling immediately`);
+
+    // Fill at the better price for the trader
+    const fillPrice = order.side === "buy"
+      ? Math.min(limitPrice, currentPrice)
+      : Math.max(limitPrice, currentPrice);
+
+    const commission = order.remainingQuantity * 1.5;
+    const fees = order.remainingQuantity * 0.5;
+
+    // Record execution
+    await recordExecution(order, {
+      quantity: order.remainingQuantity,
+      price: fillPrice,
+      slippage: 0,
+      commission,
+      fees,
+    });
+
+    // Update order status
+    await db
+      .update(orders)
+      .set({
+        status: "filled",
+        filledQuantity: order.quantity,
+        remainingQuantity: 0,
+        avgFillPrice: fillPrice.toString(),
+        firstFillAt: new Date(),
+        lastFillAt: new Date(),
+        closedAt: new Date(),
+      })
+      .where(eq(orders.id, order.id));
+
+    // Update position and get realized P&L
+    const positionResult = await updatePosition(order.tradingAccountId, order.symbol, {
+      id: "",
+      symbol: order.symbol,
+      side: order.side as "buy" | "sell",
+      quantity: order.remainingQuantity,
+      price: fillPrice,
+      commission,
+      fees,
+    });
+
+    // Update account balance
+    await updateAccountAfterExecution(order.tradingAccountId, {
+      commission,
+      fees,
+      realizedPnl: positionResult.realizedPnl
+    });
+    await checkAccountRules(order.tradingAccountId);
+
+    // Handle OCO/TP-SL logic
+    const openPosition = await db.query.positions.findFirst({
+      where: and(
+        eq(positions.tradingAccountId, order.tradingAccountId),
+        eq(positions.symbol, order.symbol),
+        eq(positions.isOpen, true)
+      ),
+    });
+
+    const wasExitOrder = positionResult.realizedPnl !== 0;
+
+    if (openPosition && openPosition.quantity !== 0) {
+      const positionQty = Math.abs(openPosition.quantity);
+      const isLong = openPosition.quantity > 0;
+      await updateTPSLOrderQuantities(order.tradingAccountId, order.symbol, positionQty, isLong);
+    } else if (wasExitOrder) {
+      await cancelRelatedOrdersOnPositionClose(order.tradingAccountId, order.symbol, order.id);
+    }
+
+    await updateAccountOrderCount(order.tradingAccountId);
+
+    return {
+      filled: true,
+      fillPrice,
+      fillQuantity: order.remainingQuantity,
+      immediate: true,
+    };
+  }
+
   // Mark as working - the order monitor service will check for fills
-  // This prevents premature fills due to price cache timing differences
   await db
     .update(orders)
     .set({
       status: "working",
     })
     .where(eq(orders.id, orderId));
+
+  console.log(`[executeLimitOrder] Order ${orderId} is now working (waiting for price ${order.side === 'buy' ? '<=' : '>='} ${limitPrice})`);
 
   return {
     working: true,
@@ -230,15 +367,110 @@ export async function executeLimitOrder(orderId: string): Promise<any> {
 }
 
 /**
- * Execute a stop order (mark as working, will trigger to market)
+ * Execute a stop order - check for immediate trigger or mark as working
  */
 export async function executeStopOrder(orderId: string): Promise<any> {
+  const order = await getOrder(orderId);
+  if (!order) throw new Error("Order not found");
+
+  const executionEngine = getMockExecutionEngine();
+  const currentPrice = executionEngine.getCurrentPrice(order.symbol);
+  const stopPrice = Number(order.stopPrice);
+
+  console.log(`[executeStopOrder] Order ${orderId}: side=${order.side}, stopPrice=${stopPrice}, currentPrice=${currentPrice}`);
+
+  // Check if the stop should trigger immediately
+  const shouldTriggerImmediately =
+    (order.side === "buy" && currentPrice >= stopPrice) ||
+    (order.side === "sell" && currentPrice <= stopPrice);
+
+  if (shouldTriggerImmediately) {
+    console.log(`[executeStopOrder] Order ${orderId} triggering immediately as market order`);
+
+    // Execute as market order with slippage
+    const execution = await executionEngine.executeMarketOrder({
+      id: order.id,
+      symbol: order.symbol,
+      orderType: "market",
+      side: order.side as "buy" | "sell",
+      quantity: order.quantity,
+      remainingQuantity: order.remainingQuantity,
+    });
+
+    // Record execution
+    await recordExecution(order, execution);
+
+    // Update order status
+    await db
+      .update(orders)
+      .set({
+        status: "filled",
+        filledQuantity: order.quantity,
+        remainingQuantity: 0,
+        avgFillPrice: execution.price.toString(),
+        firstFillAt: new Date(),
+        lastFillAt: new Date(),
+        closedAt: new Date(),
+      })
+      .where(eq(orders.id, order.id));
+
+    // Update position and get realized P&L
+    const positionResult = await updatePosition(order.tradingAccountId, order.symbol, {
+      id: "",
+      symbol: order.symbol,
+      side: order.side as "buy" | "sell",
+      quantity: execution.quantity,
+      price: execution.price,
+      commission: execution.commission,
+      fees: execution.fees,
+    });
+
+    // Update account balance
+    await updateAccountAfterExecution(order.tradingAccountId, {
+      commission: execution.commission,
+      fees: execution.fees,
+      realizedPnl: positionResult.realizedPnl
+    });
+    await checkAccountRules(order.tradingAccountId);
+
+    // Handle OCO/TP-SL logic
+    const openPosition = await db.query.positions.findFirst({
+      where: and(
+        eq(positions.tradingAccountId, order.tradingAccountId),
+        eq(positions.symbol, order.symbol),
+        eq(positions.isOpen, true)
+      ),
+    });
+
+    const wasExitOrder = positionResult.realizedPnl !== 0;
+
+    if (openPosition && openPosition.quantity !== 0) {
+      const positionQty = Math.abs(openPosition.quantity);
+      const isLong = openPosition.quantity > 0;
+      await updateTPSLOrderQuantities(order.tradingAccountId, order.symbol, positionQty, isLong);
+    } else if (wasExitOrder) {
+      await cancelRelatedOrdersOnPositionClose(order.tradingAccountId, order.symbol, order.id);
+    }
+
+    await updateAccountOrderCount(order.tradingAccountId);
+
+    return {
+      filled: true,
+      fillPrice: execution.price,
+      fillQuantity: execution.quantity,
+      immediate: true,
+    };
+  }
+
+  // Mark as working
   await db
     .update(orders)
     .set({
       status: "working",
     })
     .where(eq(orders.id, orderId));
+
+  console.log(`[executeStopOrder] Order ${orderId} is now working (waiting for price ${order.side === 'buy' ? '>=' : '<='} ${stopPrice})`);
 
   return {
     working: true,
@@ -474,6 +706,54 @@ async function updateAccountOrderCount(accountId: string): Promise<void> {
       openOrdersCount: openOrders.length,
     })
     .where(eq(tradingAccounts.id, accountId));
+}
+
+/**
+ * Update TP/SL order quantities to match new position size
+ * Called after an entry order is filled to keep TP/SL covering all contracts
+ */
+async function updateTPSLOrderQuantities(
+  accountId: string,
+  symbol: string,
+  newPositionQuantity: number,
+  isLong: boolean
+): Promise<number> {
+  // If position is closed, don't update (OCO will cancel them)
+  if (newPositionQuantity === 0) {
+    return 0;
+  }
+
+  // TP/SL orders are on the opposite side of the position
+  const tpslSide = isLong ? "sell" : "buy";
+
+  // Find all working TP (limit) and SL (stop) orders on the opposite side
+  const tpslOrders = await db.query.orders.findMany({
+    where: and(
+      eq(orders.tradingAccountId, accountId),
+      eq(orders.symbol, symbol),
+      eq(orders.side, tpslSide),
+      inArray(orders.status, ["working", "submitted", "pending"])
+    ),
+  });
+
+  let updatedCount = 0;
+  for (const order of tpslOrders) {
+    // Only update if quantity is different
+    if (order.quantity !== newPositionQuantity) {
+      await db
+        .update(orders)
+        .set({
+          quantity: newPositionQuantity,
+          remainingQuantity: newPositionQuantity,
+        })
+        .where(eq(orders.id, order.id));
+
+      console.log(`Updated ${order.orderType} order ${order.id} quantity from ${order.quantity} to ${newPositionQuantity}`);
+      updatedCount++;
+    }
+  }
+
+  return updatedCount;
 }
 
 /**

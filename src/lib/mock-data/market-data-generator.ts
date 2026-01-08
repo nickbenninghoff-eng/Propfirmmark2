@@ -210,44 +210,23 @@ export class MarketDataGenerator {
   }
 
   /**
+   * Set current price (used to synchronize with candles)
+   */
+  setCurrentPrice(price: number): void {
+    this.currentPrice = price;
+  }
+
+  /**
    * Generate next tick (real-time price update)
-   * Simulates small price movements for live trading with mean reversion
+   * Simulates small price movements for live trading
    */
   generateNextTick(): number {
-    this.barsSinceTrendChange++;
+    // Moderate volatility - visible movement but controlled drift
+    const tickVolatility = this.contract.volatility / 500;
 
-    // Volatility scaled for realistic tick-by-tick movement
-    // Balanced for visible price action while keeping candle ranges reasonable
-    const tickVolatility = this.contract.volatility / 275; // Moderate price movement
-
-    // Update peak/trough tracking
-    if (this.currentPrice > this.peakPrice) {
-      this.peakPrice = this.currentPrice;
-    }
-    if (this.currentPrice < this.troughPrice) {
-      this.troughPrice = this.currentPrice;
-    }
-
-    // Simplified price movement - no mean reversion to base price
-    // This keeps price stable around wherever it currently is
-    // Trend changes occasionally for realistic movement
-
-    // Small chance to change trend direction
-    if (Math.random() < 0.03) {
-      this.trend = (Math.random() - 0.5) * 1.5; // Weaker trend (-0.75 to 0.75)
-      this.barsSinceTrendChange = 0;
-    }
-
-    // Trend weakens over time
-    if (this.barsSinceTrendChange > 10) {
-      this.trend *= 0.95; // Decay trend
-    }
-
-    // Calculate price movement - mostly random with weak trend
-    const trendComponent = this.trend * tickVolatility * 0.3;
+    // Random walk with moderate steps
     const randomComponent = (Math.random() - 0.5) * 2 * tickVolatility;
-
-    const totalMove = (trendComponent + randomComponent) * this.currentPrice;
+    const totalMove = randomComponent * this.currentPrice;
 
     // Update price
     this.currentPrice += totalMove;

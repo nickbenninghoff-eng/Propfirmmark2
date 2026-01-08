@@ -1,9 +1,11 @@
 /**
  * Mock Execution Engine
- * Simulates realistic order fills against mock market data
+ * Simulates realistic order fills using the unified market data generator
+ *
+ * This ensures order fills happen at prices consistent with what's shown on the chart.
  */
 
-import { MarketDataGenerator, CONTRACTS } from "@/lib/mock-data/market-data-generator";
+import { getMarketData, CONTRACT_SPECS } from "@/lib/mock-data/unified-market-data";
 
 interface Order {
   id: string;
@@ -26,64 +28,27 @@ interface Execution {
 }
 
 export class MockExecutionEngine {
-  private generators: Map<string, MarketDataGenerator> = new Map();
-  private priceCache: Map<string, { price: number; timestamp: number }> = new Map();
-  private readonly PRICE_CACHE_MS = 2000; // Cache price for 2 seconds to ensure consistency
-
-  /**
-   * Get or create market data generator for a symbol
-   */
-  private getGenerator(symbol: string): MarketDataGenerator {
-    // Extract base symbol (e.g., "ESH25" -> "ES")
-    const baseSymbol = this.extractBaseSymbol(symbol);
-
-    if (!this.generators.has(baseSymbol)) {
-      this.generators.set(baseSymbol, new MarketDataGenerator(baseSymbol));
-    }
-
-    return this.generators.get(baseSymbol)!;
-  }
+  private intervalMinutes: number = 5;
 
   /**
    * Extract base symbol from futures contract (e.g., "ESH25" -> "ES")
    */
   private extractBaseSymbol(symbol: string): string {
-    const futuresSymbols = ['ES', 'NQ', 'YM', 'CL', 'GC'];
-
-    for (const baseSymbol of futuresSymbols) {
-      if (symbol.startsWith(baseSymbol)) {
-        return baseSymbol;
+    for (const base of Object.keys(CONTRACT_SPECS)) {
+      if (symbol.startsWith(base)) {
+        return base;
       }
     }
-
-    // Fallback: return first 2 characters
     return symbol.substring(0, 2).toUpperCase();
   }
 
   /**
    * Get current market price for a symbol
-   * Uses caching to ensure consistent prices across simultaneous reads
+   * Uses the unified generator to ensure consistency with chart
    */
   getCurrentPrice(symbol: string): number {
-    const baseSymbol = this.extractBaseSymbol(symbol);
-    const now = Date.now();
-    const cached = this.priceCache.get(baseSymbol);
-
-    // Return cached price if still fresh (within 100ms)
-    if (cached && (now - cached.timestamp) < this.PRICE_CACHE_MS) {
-      return cached.price;
-    }
-
-    // Generate new tick and cache it
-    const generator = this.getGenerator(symbol);
-    const newPrice = generator.generateNextTick();
-
-    this.priceCache.set(baseSymbol, {
-      price: newPrice,
-      timestamp: now,
-    });
-
-    return newPrice;
+    const generator = getMarketData(symbol, this.intervalMinutes);
+    return generator.getCurrentPrice();
   }
 
   /**
@@ -118,28 +83,33 @@ export class MockExecutionEngine {
 
     // Buy limit: fill when market price <= limit price
     if (order.side === "buy" && currentPrice <= order.limitPrice!) {
-      return this.fillLimitOrder(order, order.limitPrice!);
+      return this.fillLimitOrder(order, currentPrice);
     }
 
     // Sell limit: fill when market price >= limit price
     if (order.side === "sell" && currentPrice >= order.limitPrice!) {
-      return this.fillLimitOrder(order, order.limitPrice!);
+      return this.fillLimitOrder(order, currentPrice);
     }
 
     return null;
   }
 
   /**
-   * Fill a limit order (no slippage on limit orders)
+   * Fill a limit order at the better of limit price or current price
    */
-  private fillLimitOrder(order: Order, fillPrice: number): Execution {
+  private fillLimitOrder(order: Order, currentPrice: number): Execution {
+    // Fill at the better price for the trader
+    const fillPrice = order.side === "buy"
+      ? Math.min(order.limitPrice!, currentPrice)
+      : Math.max(order.limitPrice!, currentPrice);
+
     const commission = this.calculateCommission(order.remainingQuantity);
     const fees = this.calculateFees(order.remainingQuantity);
 
     return {
       quantity: order.remainingQuantity,
       price: fillPrice,
-      slippage: 0, // No slippage on limit orders
+      slippage: 0,
       commission,
       fees,
     };
@@ -180,25 +150,21 @@ export class MockExecutionEngine {
 
     if (order.side === "sell") {
       // Trailing stop for long position: stop trails below market price
-      // Move stop up as price rises
       const calculatedStop = currentPrice - order.trailAmount!;
       if (calculatedStop > currentStopPrice) {
         newStopPrice = calculatedStop;
       }
 
-      // Check if triggered (price fell to stop)
       if (currentPrice <= newStopPrice) {
         return { newStopPrice, triggered: true };
       }
     } else {
       // Trailing stop for short position: stop trails above market price
-      // Move stop down as price falls
       const calculatedStop = currentPrice + order.trailAmount!;
       if (calculatedStop < currentStopPrice) {
         newStopPrice = calculatedStop;
       }
 
-      // Check if triggered (price rose to stop)
       if (currentPrice >= newStopPrice) {
         return { newStopPrice, triggered: true };
       }
@@ -209,22 +175,20 @@ export class MockExecutionEngine {
 
   /**
    * Calculate realistic slippage for market orders
-   * Larger orders get more slippage
    */
   private calculateSlippage(order: Order): number {
     const baseSymbol = this.extractBaseSymbol(order.symbol);
-    const contractInfo = CONTRACTS[baseSymbol];
+    const spec = CONTRACT_SPECS[baseSymbol];
 
-    if (!contractInfo) {
+    if (!spec) {
       return 0;
     }
 
-    const tickSize = contractInfo.tickSize;
+    const tickSize = spec.tickSize;
 
     // Base slippage: 0-2 ticks for small orders
-    // Scale up with order size
     const baseTicks = Math.random() * 2;
-    const sizeFactor = 1 + (order.quantity / 10); // Larger orders = more slippage
+    const sizeFactor = 1 + (order.quantity / 10);
     const slippageTicks = baseTicks * sizeFactor;
 
     return slippageTicks * tickSize;
@@ -245,32 +209,11 @@ export class MockExecutionEngine {
   }
 
   /**
-   * Simulate partial fill (10% chance for large orders)
-   */
-  shouldPartialFill(order: Order): { shouldPartial: boolean; fillQuantity: number } {
-    // Only consider partial fills for large orders (5+ contracts)
-    if (order.remainingQuantity < 5) {
-      return { shouldPartial: false, fillQuantity: order.remainingQuantity };
-    }
-
-    // 10% chance of partial fill
-    if (Math.random() < 0.1) {
-      // Fill 30-70% of remaining quantity
-      const fillPercent = 0.3 + (Math.random() * 0.4);
-      const fillQuantity = Math.floor(order.remainingQuantity * fillPercent);
-
-      return { shouldPartial: true, fillQuantity: Math.max(1, fillQuantity) };
-    }
-
-    return { shouldPartial: false, fillQuantity: order.remainingQuantity };
-  }
-
-  /**
-   * Get contract specifications for margin calculations
+   * Get contract specifications
    */
   getContractInfo(symbol: string) {
     const baseSymbol = this.extractBaseSymbol(symbol);
-    return CONTRACTS[baseSymbol];
+    return CONTRACT_SPECS[baseSymbol];
   }
 }
 

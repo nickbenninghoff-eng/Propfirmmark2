@@ -38,7 +38,14 @@
       "Bash(npx drizzle-kit generate)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd comprehensive live trading functionality with order and position management\n\n- Implemented database schema for orders, positions, executions, and order rule checks with full tracking capabilities\n- Created trading interface pages with TradingView chart integration and live order/position panels\n- Added complete order management API with CRUD operations and status tracking \\(pending, submitted, working, filled, cancelled, rejected\\)\n- Built position tracking service with real-time P&L calculations and margin monitoring\n- Implemented mock execution engine for simulated order fills with realistic slippage and timing\n- Added order validation service with pre-trade compliance checks for account rules and risk limits\n- Created order monitor service for automated order status updates and fill notifications\n- Built market data APIs with mock candle generation and real-time price updates for ESH25 futures\n- Integrated Tradovate API client for potential live broker connectivity\n- Added React Query providers for efficient data fetching and real-time updates\n- Created custom hooks for trading shortcuts, order monitoring, and data synchronization\n- Implemented interactive UI components: order entry form, quantity selector, quick order buttons, position size calculator\n- Added test data generation endpoints for development and QA testing\n- Established admin endpoints for triggering order monitoring and regenerating trade data\n- Set up comprehensive API routing for accounts summary and user account management\n\n🤖 Generated with Claude Code\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git mv:*)",
-      "Bash(move \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\Claude.md\" \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\CLAUDE.md\")"
+      "Bash(move \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\Claude.md\" \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\CLAUDE.md\")",
+      "Bash(del \"C:\\\\Users\\\\nickb\\\\PropFirmMark2\\\\src\\\\app\\\\api\\\\checkout\\\\verify\\\\route.ts\")",
+      "Bash(timeout /t 10:*)",
+      "Bash(npx tsc:*)",
+      "Skill(dev)",
+      "Bash(if exist .next rmdir /s /q .next)",
+      "Skill(review)",
+      "Skill(git)"
     ]
   }
 }

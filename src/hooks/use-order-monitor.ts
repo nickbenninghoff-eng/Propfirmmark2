@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 /**
  * Hook to automatically trigger order monitoring in the background
- * This polls the order monitor API every 5 seconds while the page is open
+ * This polls the order monitor API every 1 second while the page is open
  *
  * NOTE: This is a development/MVP solution. In production, use a proper
  * background job scheduler (Vercel Cron, BullMQ, etc.)
@@ -38,8 +38,8 @@ export function useOrderMonitor(accountId: string, enabled: boolean = true) {
     // Run immediately on mount
     triggerMonitor();
 
-    // Then run every 5 seconds
-    intervalRef.current = setInterval(triggerMonitor, 5000);
+    // Then run every 1 second (matches price update frequency)
+    intervalRef.current = setInterval(triggerMonitor, 1000);
 
     return () => {
       if (intervalRef.current) {

@@ -11,6 +11,17 @@ interface TradingChartProps {
   accountId: string;
 }
 
+// Round price to tick size for the symbol
+function roundToTick(price: number, symbol: string): number {
+  // Get tick size based on symbol
+  let tickSize = 0.25; // Default for ES, NQ
+  if (symbol.startsWith('CL')) tickSize = 0.01;
+  else if (symbol.startsWith('GC')) tickSize = 0.10;
+  else if (symbol.startsWith('YM')) tickSize = 1;
+
+  return Math.round(price / tickSize) * tickSize;
+}
+
 // Unified label component that keeps all elements together
 interface PriceLineLabelProps {
   yCoord: number;
@@ -225,61 +236,27 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
     }
   }, [symbol]);
 
-  // Update last candle with real-time price and handle candle closing
+  // Update chart with real-time candle data from unified generator
   useEffect(() => {
-    if (!candlestickSeriesRef.current || !priceData?.success || !lastCandleRef.current) {
+    if (!candlestickSeriesRef.current || !priceData?.success) {
       return;
     }
 
-    const currentPrice = Number(priceData.price);
-    let lastCandle = lastCandleRef.current;
-    const now = Math.floor(Date.now() / 1000);
-    const candleIntervalSeconds = 5 * 60; // 5 minute candles
-
-    // Catch up: create new candles if we're behind
-    // This handles cases where the chart was loaded with old candle timestamps
-    while (now >= lastCandle.time + candleIntervalSeconds) {
-      const newCandleTime = lastCandle.time + candleIntervalSeconds;
-
-      // Create new candle starting from previous candle's close (no gap)
-      const newCandle = {
-        time: newCandleTime,
-        open: lastCandle.close,
-        high: lastCandle.close,
-        low: lastCandle.close,
-        close: lastCandle.close,
+    // Use the currentCandle from the unified generator
+    // This ensures the chart shows exactly what the server knows
+    const serverCandle = priceData.currentCandle;
+    if (serverCandle) {
+      const candle = {
+        time: serverCandle.time,
+        open: serverCandle.open,
+        high: serverCandle.high,
+        low: serverCandle.low,
+        close: serverCandle.close,
       };
 
-      candlestickSeriesRef.current.update(newCandle);
-      lastCandle = newCandle;
-      lastCandleRef.current = newCandle;
+      candlestickSeriesRef.current.update(candle);
+      lastCandleRef.current = candle;
     }
-
-    // Update the current candle with price, but cap the range
-    // Max range ~6 points for ES (matches typical 5-min historical candle range)
-    const maxRange = 6;
-    let newHigh = Math.max(lastCandle.high, currentPrice);
-    let newLow = Math.min(lastCandle.low, currentPrice);
-
-    // Cap the range if it's getting too large
-    if (newHigh - newLow > maxRange) {
-      // Keep the side closer to current price, cap the other
-      if (currentPrice - newLow > newHigh - currentPrice) {
-        newLow = newHigh - maxRange;
-      } else {
-        newHigh = newLow + maxRange;
-      }
-    }
-
-    const updatedCandle = {
-      ...lastCandle,
-      close: currentPrice,
-      high: newHigh,
-      low: newLow,
-    };
-
-    candlestickSeriesRef.current.update(updatedCandle);
-    lastCandleRef.current = updatedCandle;
   }, [priceData]);
 
   // Render price lines (without titles - we render our own labels)
@@ -301,20 +278,31 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
     // Add price lines for open positions (no title - we render our own)
     if (positionsData?.success && currentPrice) {
       const positions = positionsData.positions || [];
+
       positions.forEach((position: any) => {
+        // Match position symbol to chart symbol (both should be like "ESH25")
         if (position.symbol === symbol && candlestickSeriesRef.current) {
           const isLong = position.quantity > 0;
           const entryPrice = Number(position.avgEntryPrice);
 
-          const priceLine = candlestickSeriesRef.current.createPriceLine({
-            price: entryPrice,
-            color: isLong ? "#10b981" : "#ef4444",
-            lineWidth: 2,
-            lineStyle: 2, // Dashed
-            axisLabelVisible: true,
-            title: '', // No title - we render our own unified label
-          });
-          priceLinesRef.current.push(priceLine);
+          // Skip if entry price is invalid
+          if (!entryPrice || isNaN(entryPrice) || entryPrice <= 0) {
+            return;
+          }
+
+          try {
+            const priceLine = candlestickSeriesRef.current.createPriceLine({
+              price: entryPrice,
+              color: isLong ? "#10b981" : "#ef4444",
+              lineWidth: 2,
+              lineStyle: 2, // Dashed
+              axisLabelVisible: true,
+              title: '', // No title - we render our own unified label
+            });
+            priceLinesRef.current.push(priceLine);
+          } catch (e) {
+            // Line creation failed - ignore
+          }
         }
       });
     }
@@ -397,6 +385,9 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
       }
 
       if (newPrice) {
+        // Round to tick size
+        const roundedPrice = roundToTick(newPrice, symbol);
+
         try {
           const updateData: any = {
             orderId: draggingOrder.orderId,
@@ -404,13 +395,13 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
           };
 
           if (draggingOrder.priceType === 'limit') {
-            updateData.limitPrice = newPrice;
+            updateData.limitPrice = roundedPrice;
           } else {
-            updateData.stopPrice = newPrice;
+            updateData.stopPrice = roundedPrice;
           }
 
           await updateOrderMutation.mutateAsync(updateData);
-          toast.success(`Order ${draggingOrder.priceType} price updated to $${newPrice.toFixed(2)}`);
+          toast.success(`Order ${draggingOrder.priceType} price updated to $${roundedPrice.toFixed(2)}`);
         } catch (error: any) {
           toast.error(error.message || "Failed to update order");
         }
@@ -472,14 +463,17 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
       if (targetPrice) {
         const { type, entryPrice, quantity, isLong } = draggingTPSL;
 
+        // Round to tick size
+        const roundedPrice = roundToTick(targetPrice, symbol);
+
         // Enforce directional rules
         // For LONG: TP must be above entry, SL must be below entry
         // For SHORT: TP must be below entry, SL must be above entry
         let isValidPrice = false;
         if (type === 'tp') {
-          isValidPrice = isLong ? (targetPrice > entryPrice) : (targetPrice < entryPrice);
+          isValidPrice = isLong ? (roundedPrice > entryPrice) : (roundedPrice < entryPrice);
         } else {
-          isValidPrice = isLong ? (targetPrice < entryPrice) : (targetPrice > entryPrice);
+          isValidPrice = isLong ? (roundedPrice < entryPrice) : (roundedPrice > entryPrice);
         }
 
         if (!isValidPrice) {
@@ -498,22 +492,55 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
           if (!positionStillExists) {
             toast.error("Position was closed while dragging. Order not created.");
           } else {
-            // Create the order
-            try {
-              // For TP: limit order to close the position (opposite side)
-              // For SL: stop order to close the position (opposite side)
-              const orderData = {
-                accountId,
-                symbol,
-                orderType: type === 'tp' ? 'limit' : 'stop',
-                side: isLong ? 'sell' : 'buy', // Opposite of position to close it
-                quantity,
-                ...(type === 'tp' ? { limitPrice: targetPrice } : { stopPrice: targetPrice }),
-                timeInForce: 'gtc', // Good till cancelled
-              };
+            // Get current position to get the correct quantity (may have changed)
+            const currentPosition = positionsData.positions.find((p: any) => p.symbol === symbol);
+            const currentQuantity = currentPosition ? Math.abs(currentPosition.quantity) : quantity;
+            const orderSide = isLong ? 'sell' : 'buy'; // Opposite of position to close it
 
-              await submitOrderMutation.mutateAsync(orderData);
-              toast.success(`${type === 'tp' ? 'Take Profit' : 'Stop Loss'} set at $${targetPrice.toFixed(2)}`);
+            // Check if there's already an existing TP or SL order for this position
+            // TP = limit order on opposite side, SL = stop order on opposite side
+            const existingOrders = ordersData?.orders || [];
+            const existingOrder = existingOrders.find((order: any) =>
+              order.symbol === symbol &&
+              order.side === orderSide &&
+              ['pending', 'submitted', 'working', 'partial'].includes(order.status) &&
+              (type === 'tp' ? order.orderType === 'limit' : order.orderType === 'stop')
+            );
+
+            try {
+              if (existingOrder) {
+                // Update the existing order with new price and quantity
+                const updateData: any = {
+                  orderId: existingOrder.id,
+                  accountId,
+                  quantity: currentQuantity, // Update to cover all contracts
+                };
+
+                if (type === 'tp') {
+                  updateData.limitPrice = roundedPrice;
+                } else {
+                  updateData.stopPrice = roundedPrice;
+                }
+
+                await updateOrderMutation.mutateAsync(updateData);
+                toast.success(`${type === 'tp' ? 'Take Profit' : 'Stop Loss'} updated to $${roundedPrice.toFixed(2)} for ${currentQuantity} contracts`);
+              } else {
+                // Create a new order
+                // For TP: limit order to close the position (opposite side)
+                // For SL: stop order to close the position (opposite side)
+                const orderData = {
+                  accountId,
+                  symbol,
+                  orderType: type === 'tp' ? 'limit' : 'stop',
+                  side: orderSide,
+                  quantity: currentQuantity,
+                  ...(type === 'tp' ? { limitPrice: roundedPrice } : { stopPrice: roundedPrice }),
+                  timeInForce: 'gtc', // Good till cancelled
+                };
+
+                await submitOrderMutation.mutateAsync(orderData);
+                toast.success(`${type === 'tp' ? 'Take Profit' : 'Stop Loss'} set at $${roundedPrice.toFixed(2)}`);
+              }
             } catch (error: any) {
               toast.error(error.message || `Failed to set ${type === 'tp' ? 'Take Profit' : 'Stop Loss'}`);
             }
@@ -666,6 +693,12 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
         if (position.symbol !== symbol) return null;
 
         const entryPrice = Number(position.avgEntryPrice);
+
+        // Skip if entry price is invalid
+        if (!entryPrice || isNaN(entryPrice) || entryPrice <= 0) {
+          return null;
+        }
+
         const yCoord = getYCoordinate(entryPrice);
         if (yCoord === null) return null;
 
@@ -713,7 +746,7 @@ export default function TradingChart({ symbol, accountId }: TradingChartProps) {
         const priceType = limitPrice ? 'limit' : 'stop';
         const labelText = limitPrice
           ? `${order.orderType.toUpperCase()} ${order.side.toUpperCase()} ${order.quantity} @ ${displayPrice.toFixed(2)}`
-          : `STOP @ ${displayPrice.toFixed(2)}`;
+          : `STOP ${order.side.toUpperCase()} ${order.quantity} @ ${displayPrice.toFixed(2)}`;
 
         const labelColor = limitPrice
           ? (order.side === "buy" ? "#06b6d4" : "#8b5cf6")

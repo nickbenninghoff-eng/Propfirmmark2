@@ -154,6 +154,7 @@ export async function PATCH(
     const schema = z.object({
       limitPrice: z.number().positive().optional(),
       stopPrice: z.number().positive().optional(),
+      quantity: z.number().int().positive().optional(),
     });
 
     const validated = schema.parse(body);
@@ -196,6 +197,9 @@ export async function PATCH(
     }
     if (validated.stopPrice !== undefined) {
       updateData.stopPrice = validated.stopPrice.toString();
+    }
+    if (validated.quantity !== undefined) {
+      updateData.quantity = validated.quantity;
     }
 
     await db.update(orders)

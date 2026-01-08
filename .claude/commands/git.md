@@ -1,3 +1,7 @@
+---
+description: Commit all changes and push to GitHub
+---
+
 # Commit and Push to GitHub
 
 Commit all changes and push to GitHub. Follow these steps:

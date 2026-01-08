@@ -168,17 +168,24 @@ export function useUpdateOrder() {
       orderId,
       accountId,
       limitPrice,
-      stopPrice
+      stopPrice,
+      quantity
     }: {
       orderId: string;
       accountId: string;
       limitPrice?: number;
       stopPrice?: number;
+      quantity?: number;
     }) => {
+      const updateData: any = {};
+      if (limitPrice !== undefined) updateData.limitPrice = limitPrice;
+      if (stopPrice !== undefined) updateData.stopPrice = stopPrice;
+      if (quantity !== undefined) updateData.quantity = quantity;
+
       const res = await fetch(`/api/orders/${orderId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limitPrice, stopPrice }),
+        body: JSON.stringify(updateData),
       });
 
       const data = await res.json();

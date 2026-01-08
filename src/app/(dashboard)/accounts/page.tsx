@@ -50,7 +50,7 @@ export default async function AccountsPage() {
   }));
 
   const activeAccounts = userAccounts.filter(
-    (a) => a.status === "active" || a.status === "funded"
+    (a) => a.status === "active" || a.status === "funded" || a.status === "pending_activation"
   );
   const completedAccounts = userAccounts.filter(
     (a) => a.status === "passed" || a.status === "failed"

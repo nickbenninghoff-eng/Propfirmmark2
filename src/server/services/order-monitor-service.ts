@@ -29,18 +29,29 @@ export async function monitorWorkingOrders(): Promise<{
 
   const executionEngine = getMockExecutionEngine();
 
+  console.log(`[Order Monitor] Checking ${workingOrders.length} working orders`);
+  if (workingOrders.length > 0) {
+    console.log(`[Order Monitor] Order types: ${workingOrders.map(o => `${o.orderType}(${o.side})`).join(', ')}`);
+  }
+
   for (const order of workingOrders) {
     try {
       const currentPrice = executionEngine.getCurrentPrice(order.symbol);
 
       if (order.orderType === "limit") {
+        const limitPrice = Number(order.limitPrice);
+        console.log(`[Order Monitor] Limit order ${order.id}: side=${order.side}, limitPrice=${limitPrice}, currentPrice=${currentPrice}`);
         const shouldFill = await checkLimitOrderFill(order, currentPrice, executionEngine);
+        console.log(`[Order Monitor] Should fill: ${shouldFill}`);
         if (shouldFill) {
           await fillLimitOrder(order, executionEngine);
           filled++;
         }
       } else if (order.orderType === "stop") {
+        const stopPrice = Number(order.stopPrice);
+        console.log(`[Order Monitor] Stop order ${order.id}: side=${order.side}, stopPrice=${stopPrice}, currentPrice=${currentPrice}`);
         const shouldTrigger = await checkStopOrderTrigger(order, currentPrice, executionEngine);
+        console.log(`[Order Monitor] Should trigger: ${shouldTrigger}`);
         if (shouldTrigger) {
           await triggerStopOrder(order, executionEngine);
           triggered++;
@@ -101,7 +112,18 @@ async function checkLimitOrderFill(
  * Fill a limit order
  */
 async function fillLimitOrder(order: any, executionEngine: any): Promise<void> {
-  const fillPrice = Number(order.limitPrice);
+  const limitPrice = Number(order.limitPrice);
+  const currentPrice = executionEngine.getCurrentPrice(order.symbol);
+
+  // Fill at the BETTER price for the trader:
+  // - Buy limit: fill at min(limitPrice, currentPrice) - lower is better for buyer
+  // - Sell limit: fill at max(limitPrice, currentPrice) - higher is better for seller
+  const fillPrice = order.side === "buy"
+    ? Math.min(limitPrice, currentPrice)
+    : Math.max(limitPrice, currentPrice);
+
+  console.log(`[Limit Order Fill] Filling at ${fillPrice} (limit: ${limitPrice}, market: ${currentPrice})`);
+
   const commission = order.remainingQuantity * 1.5;
   const fees = order.remainingQuantity * 0.5;
 
@@ -155,8 +177,55 @@ async function fillLimitOrder(order: any, executionEngine: any): Promise<void> {
   });
   await checkAccountRules(order.tradingAccountId);
 
-  // OCO: Cancel related orders if position is now closed
-  await cancelRelatedOrdersOnPositionClose(order.tradingAccountId, order.symbol, order.id);
+  // Get current position to update TP/SL orders or cancel if closed
+  // First check for open position
+  const openPosition = await db.query.positions.findFirst({
+    where: and(
+      eq(positions.tradingAccountId, order.tradingAccountId),
+      eq(positions.symbol, order.symbol),
+      eq(positions.isOpen, true)
+    ),
+  });
+
+  // Also check for recently closed position (in case this order just closed it)
+  const closedPosition = await db.query.positions.findFirst({
+    where: and(
+      eq(positions.tradingAccountId, order.tradingAccountId),
+      eq(positions.symbol, order.symbol),
+      eq(positions.isOpen, false)
+    ),
+    orderBy: (positions, { desc }) => [desc(positions.closedAt)],
+  });
+
+  console.log(`[Limit Order Fill] Order ${order.id} filled. Position check:`, {
+    symbol: order.symbol,
+    orderSide: order.side,
+    realizedPnl: positionResult.realizedPnl,
+    openPositionFound: !!openPosition,
+    openPositionQty: openPosition?.quantity,
+  });
+
+  // Use realizedPnl to determine if this was an entry or exit:
+  // - realizedPnl = 0 means this was a pure entry (opened or added to position)
+  // - realizedPnl != 0 means this closed/reduced a position
+  const wasExitOrder = positionResult.realizedPnl !== 0;
+
+  if (openPosition && openPosition.quantity !== 0) {
+    // Position still exists and is open - update TP/SL order quantities to match current position size
+    const positionQty = Math.abs(openPosition.quantity);
+    const isLong = openPosition.quantity > 0;
+
+    // Always update TP/SL quantities when position is still open (entry or partial exit)
+    console.log(`[Limit Order Fill] Position still open with ${positionQty} contracts, updating TP/SL quantities`);
+    await updateTPSLOrderQuantities(order.tradingAccountId, order.symbol, positionQty, isLong);
+  } else if (wasExitOrder) {
+    // This was an exit order AND no open position remains - cancel related orders (OCO)
+    console.log(`[Limit Order Fill] Exit order closed position, cancelling related orders (OCO)`);
+    await cancelRelatedOrdersOnPositionClose(order.tradingAccountId, order.symbol, order.id);
+  } else {
+    // This was an entry order but somehow no position found - don't cancel anything
+    console.log(`[Limit Order Fill] Entry order but no position found - skipping OCO (position may be newly created)`);
+  }
 
   await updateAccountOrderCount(order.tradingAccountId);
 }
@@ -249,8 +318,45 @@ async function triggerStopOrder(order: any, executionEngine: any): Promise<void>
   });
   await checkAccountRules(order.tradingAccountId);
 
-  // OCO: Cancel related orders if position is now closed
-  await cancelRelatedOrdersOnPositionClose(order.tradingAccountId, order.symbol, order.id);
+  // Get current position to update TP/SL orders or cancel if closed
+  // First check for open position
+  const openPosition = await db.query.positions.findFirst({
+    where: and(
+      eq(positions.tradingAccountId, order.tradingAccountId),
+      eq(positions.symbol, order.symbol),
+      eq(positions.isOpen, true)
+    ),
+  });
+
+  console.log(`[Stop Order Fill] Order ${order.id} filled. Position check:`, {
+    symbol: order.symbol,
+    orderSide: order.side,
+    realizedPnl: positionResult.realizedPnl,
+    openPositionFound: !!openPosition,
+    openPositionQty: openPosition?.quantity,
+  });
+
+  // Use realizedPnl to determine if this was an entry or exit:
+  // - realizedPnl = 0 means this was a pure entry (opened or added to position)
+  // - realizedPnl != 0 means this closed/reduced a position
+  const wasExitOrder = positionResult.realizedPnl !== 0;
+
+  if (openPosition && openPosition.quantity !== 0) {
+    // Position still exists and is open - update TP/SL order quantities to match current position size
+    const positionQty = Math.abs(openPosition.quantity);
+    const isLong = openPosition.quantity > 0;
+
+    // Always update TP/SL quantities when position is still open (entry or partial exit)
+    console.log(`[Stop Order Fill] Position still open with ${positionQty} contracts, updating TP/SL quantities`);
+    await updateTPSLOrderQuantities(order.tradingAccountId, order.symbol, positionQty, isLong);
+  } else if (wasExitOrder) {
+    // This was an exit order AND no open position remains - cancel related orders (OCO)
+    console.log(`[Stop Order Fill] Exit order closed position, cancelling related orders (OCO)`);
+    await cancelRelatedOrdersOnPositionClose(order.tradingAccountId, order.symbol, order.id);
+  } else {
+    // This was an entry order but somehow no position found - don't cancel anything
+    console.log(`[Stop Order Fill] Entry order but no position found - skipping OCO`);
+  }
 
   await updateAccountOrderCount(order.tradingAccountId);
 }
@@ -431,6 +537,54 @@ async function updateAccountOrderCount(accountId: string): Promise<void> {
       openOrdersCount: openOrders.length,
     })
     .where(eq(tradingAccounts.id, accountId));
+}
+
+/**
+ * Update TP/SL order quantities to match new position size
+ * Called after an entry order is filled to keep TP/SL covering all contracts
+ */
+async function updateTPSLOrderQuantities(
+  accountId: string,
+  symbol: string,
+  newPositionQuantity: number,
+  isLong: boolean
+): Promise<number> {
+  // If position is closed, don't update (OCO will cancel them)
+  if (newPositionQuantity === 0) {
+    return 0;
+  }
+
+  // TP/SL orders are on the opposite side of the position
+  const tpslSide = isLong ? "sell" : "buy";
+
+  // Find all working TP (limit) and SL (stop) orders on the opposite side
+  const tpslOrders = await db.query.orders.findMany({
+    where: and(
+      eq(orders.tradingAccountId, accountId),
+      eq(orders.symbol, symbol),
+      eq(orders.side, tpslSide),
+      inArray(orders.status, ["working", "submitted", "pending"])
+    ),
+  });
+
+  let updatedCount = 0;
+  for (const order of tpslOrders) {
+    // Only update if quantity is different
+    if (order.quantity !== newPositionQuantity) {
+      await db
+        .update(orders)
+        .set({
+          quantity: newPositionQuantity,
+          remainingQuantity: newPositionQuantity,
+        })
+        .where(eq(orders.id, order.id));
+
+      console.log(`Updated ${order.orderType} order ${order.id} quantity from ${order.quantity} to ${newPositionQuantity}`);
+      updatedCount++;
+    }
+  }
+
+  return updatedCount;
 }
 
 /**

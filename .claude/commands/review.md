@@ -1,3 +1,7 @@
+---
+description: Review all work completed in this session before committing
+---
+
 # End of Session Review
 
 Review all work completed in this session before committing.

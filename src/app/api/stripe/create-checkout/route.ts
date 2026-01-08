@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 import { stripe } from "@/lib/stripe";
 import { db } from "@/lib/db";
@@ -39,6 +40,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Tier not found or inactive" }, { status: 404 });
     }
 
+    // Get base URL from request headers (works for any port/host)
+    const headersList = await headers();
+    const host = headersList.get("host") || "localhost:3000";
+    const protocol = headersList.get("x-forwarded-proto") || "http";
+    const baseUrl = `${protocol}://${host}`;
+
     // Create Stripe checkout session
     const checkoutSession = await stripe.checkout.sessions.create({
       customer_email: user.email || undefined,
@@ -60,12 +67,13 @@ export async function POST(request: NextRequest) {
         },
       ],
       mode: "payment",
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/accounts?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/accounts/purchase?canceled=true`,
+      success_url: `${baseUrl}/api/checkout/verify?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}/accounts/purchase?canceled=true`,
       metadata: {
         userId: session.user.id,
         tierId: tier.id,
         tierName: tier.name,
+        type: "account_purchase",
       },
     });
 
