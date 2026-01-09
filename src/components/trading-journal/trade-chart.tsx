@@ -69,11 +69,11 @@ export function TradeChart({ symbol, entryPrice, exitPrice, entryTime, exitTime,
     let chart: any;
     let candlestickSeries: any;
 
-    // Dynamically import lightweight-charts
-    import('lightweight-charts').then(({ createChart, ColorType }) => {
+    // Dynamically import lightweight-charts (v5 API)
+    import('lightweight-charts').then(({ createChart, ColorType, CandlestickSeries, createSeriesMarkers }) => {
       if (!chartContainerRef.current) return;
 
-      // Create chart using v4 API
+      // Create chart using v5 API
       chart = createChart(chartContainerRef.current, {
         layout: {
           background: { type: ColorType.Solid, color: "#0a0a0a" },
@@ -97,8 +97,8 @@ export function TradeChart({ symbol, entryPrice, exitPrice, entryTime, exitTime,
 
       chartRef.current = chart;
 
-      // Add candlestick series using v4 API
-      candlestickSeries = chart.addCandlestickSeries({
+      // Add candlestick series using v5 API
+      candlestickSeries = chart.addSeries(CandlestickSeries, {
         upColor: "#10b981",
         downColor: "#ef4444",
         borderUpColor: "#10b981",
@@ -112,25 +112,25 @@ export function TradeChart({ symbol, entryPrice, exitPrice, entryTime, exitTime,
         if (mockData.length > 0 && candlestickSeries) {
           candlestickSeries.setData(mockData);
 
-          // Add markers after data is loaded
+          // Add markers after data is loaded (v5 API uses createSeriesMarkers)
           const markers = [
             {
-              time: Math.floor(entryTime.getTime() / 1000),
-              position: direction === "long" ? "belowBar" : "aboveBar",
+              time: Math.floor(entryTime.getTime() / 1000) as number,
+              position: (direction === "long" ? "belowBar" : "aboveBar") as "belowBar" | "aboveBar",
               color: "#10b981",
-              shape: direction === "long" ? "arrowUp" : "arrowDown",
+              shape: (direction === "long" ? "arrowUp" : "arrowDown") as "arrowUp" | "arrowDown",
               text: `Entry @ $${entryPrice.toFixed(2)}`,
             },
             {
-              time: Math.floor(exitTime.getTime() / 1000),
-              position: direction === "long" ? "aboveBar" : "belowBar",
+              time: Math.floor(exitTime.getTime() / 1000) as number,
+              position: (direction === "long" ? "aboveBar" : "belowBar") as "belowBar" | "aboveBar",
               color: "#ef4444",
-              shape: direction === "long" ? "arrowDown" : "arrowUp",
+              shape: (direction === "long" ? "arrowDown" : "arrowUp") as "arrowUp" | "arrowDown",
               text: `Exit @ $${exitPrice.toFixed(2)}`,
             },
           ];
 
-          candlestickSeries.setMarkers(markers);
+          createSeriesMarkers(candlestickSeries, markers);
 
           // Fit content after data and markers are loaded
           if (chart) {

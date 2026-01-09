@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useSubmitOrder, useClosePosition, useCancelOrder, usePositions, useOrders, useMarketPrice } from "@/hooks/use-trading-data";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { TrendingUp, TrendingDown, X, Loader2, ArrowUp, ArrowDown } from "lucide-react";
+import { TrendingUp, TrendingDown, X, Loader2, ArrowUp, ArrowDown, Ban } from "lucide-react";
 
 interface QuickOrderButtonsProps {
   accountId: string;
@@ -76,29 +76,29 @@ export default function QuickOrderButtons({ accountId, symbol, defaultQuantity =
     }
   };
 
-  const handleCloseAllPositions = async () => {
-    if (!positionsData?.success || positionsData.positions.length === 0) {
-      toast.error("No open positions to close");
+  const handleCancelAllOrders = async () => {
+    if (!ordersData?.success || ordersData.orders.length === 0) {
+      toast.error("No open orders to cancel");
       return;
     }
 
-    if (!confirm(`Close all ${positionsData.positions.length} position(s)?`)) {
+    if (!confirm(`Cancel all ${ordersData.orders.length} order(s)?`)) {
       return;
     }
 
     try {
-      setActionInProgress("close-all");
+      setActionInProgress("cancel-all");
 
-      for (const position of positionsData.positions) {
-        await closePositionMutation.mutateAsync({
+      for (const order of ordersData.orders) {
+        await cancelOrderMutation.mutateAsync({
+          orderId: order.id,
           accountId,
-          symbol: position.symbol,
         });
       }
 
-      toast.success("All positions closed successfully");
+      toast.success("All orders cancelled successfully");
     } catch (error: any) {
-      toast.error(error.message || "Failed to close all positions");
+      toast.error(error.message || "Failed to cancel all orders");
     } finally {
       setActionInProgress(null);
     }
@@ -276,20 +276,20 @@ export default function QuickOrderButtons({ accountId, symbol, defaultQuantity =
         </span>
       </Button>
 
-      {/* Row 3: Close All Positions, Flatten Account */}
+      {/* Row 3: Cancel All Orders, Flatten Account */}
       <Button
-        onClick={handleCloseAllPositions}
+        onClick={handleCancelAllOrders}
         disabled={actionInProgress !== null}
         className="group relative h-14 w-14 cursor-pointer rounded-full border border-amber-500/40 bg-gradient-to-br from-amber-500/20 to-amber-500/10 p-0 shadow-lg shadow-amber-500/20 backdrop-blur-xl transition-all duration-300 hover:scale-110 hover:shadow-xl hover:shadow-amber-500/40"
-        title="Close All Positions"
+        title="Cancel All Orders"
       >
-        {actionInProgress === "close-all" ? (
+        {actionInProgress === "cancel-all" ? (
           <Loader2 className="h-6 w-6 animate-spin text-amber-400" />
         ) : (
-          <X className="h-6 w-6 text-amber-400" />
+          <Ban className="h-6 w-6 text-amber-400" />
         )}
         <span className="absolute right-full mr-3 hidden whitespace-nowrap rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-400 backdrop-blur-xl group-hover:block">
-          Close All Positions
+          Cancel All Orders
         </span>
       </Button>
 

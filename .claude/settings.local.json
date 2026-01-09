@@ -45,7 +45,13 @@
       "Skill(dev)",
       "Bash(if exist .next rmdir /s /q .next)",
       "Skill(review)",
-      "Skill(git)"
+      "Skill(git)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "WebFetch(domain:tradingview.github.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(cat:*)"
     ]
   }
 }
