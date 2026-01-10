@@ -5,6 +5,167 @@ import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickSeries, Histo
 import { useMarketPrice, usePositions, useOrders, useUpdateOrder, useCancelOrder, useClosePosition, useSubmitOrder } from "@/hooks/use-trading-data";
 import { toast } from "sonner";
 import { X, GripVertical, TrendingUp, TrendingDown, Target, ShieldAlert, Trash2, Minus, MousePointer, Pencil, Square, Circle, BarChart3, Settings, ChevronRight, Activity, Palette, Grid3X3, Crosshair, Save, RotateCcw, ZoomIn, ZoomOut, Maximize2, Camera, ChevronDown, Search, GitFork, ArrowUpRight, Percent, Clock } from "lucide-react";
+import { calculateVWAP, vwapToLineSeries, vwapBandsToLineSeries, calculateAnchoredVWAP, anchoredVwapToLineSeries, anchoredVwapBandsToLineSeries, DEFAULT_VWAP_SETTINGS, type VWAPSettings, type VWAPAnchorPeriod, type VWAPSource, type Candle } from "@/lib/indicators/vwap";
+
+// VWAP Instance for multiple VWAPs
+interface VWAPInstance {
+  id: string;
+  name: string;
+  color: string;
+  anchorPeriod: VWAPAnchorPeriod;
+  source: VWAPSource;
+  showBands: boolean;
+  bandMult1: number;
+  bandMult2: number;
+  bandMult3: number;
+  showBand1: boolean;
+  showBand2: boolean;
+  showBand3: boolean;
+  lineWidth: number; // 1-4 for main line
+  lineStyle: number; // 0=solid, 1=dotted, 2=dashed for main line
+  bandColor1: string;
+  bandColor2: string;
+  bandColor3: string;
+  bandLineWidth1: number; // 1-4 for band 1
+  bandLineStyle1: number; // 0=solid, 1=dotted, 2=dashed for band 1
+  bandLineWidth2: number; // 1-4 for band 2
+  bandLineStyle2: number; // 0=solid, 1=dotted, 2=dashed for band 2
+  bandLineWidth3: number; // 1-4 for band 3
+  bandLineStyle3: number; // 0=solid, 1=dotted, 2=dashed for band 3
+  // Series refs stored per instance
+  mainSeries: ISeriesApi<"Line"> | null;
+  upperBand1: ISeriesApi<"Line"> | null;
+  lowerBand1: ISeriesApi<"Line"> | null;
+  upperBand2: ISeriesApi<"Line"> | null;
+  lowerBand2: ISeriesApi<"Line"> | null;
+  upperBand3: ISeriesApi<"Line"> | null;
+  lowerBand3: ISeriesApi<"Line"> | null;
+}
+
+// SMA Instance for multiple SMAs
+interface SMAInstance {
+  id: string;
+  name: string;
+  color: string;
+  period: number;
+  lineWidth: number; // 1-4
+  lineStyle: number; // 0=solid, 1=dotted, 2=dashed
+  series: ISeriesApi<"Line"> | null;
+}
+
+// EMA Instance for multiple EMAs
+interface EMAInstance {
+  id: string;
+  name: string;
+  color: string;
+  period: number;
+  lineWidth: number; // 1-4
+  lineStyle: number; // 0=solid, 1=dotted, 2=dashed
+  series: ISeriesApi<"Line"> | null;
+}
+
+// RSI Instance for multiple RSIs
+interface RSIInstance {
+  id: string;
+  name: string;
+  color: string;
+  period: number;
+  overbought: number;
+  oversold: number;
+  lineWidth: number; // 1-4
+  lineStyle: number; // 0=solid, 1=dotted, 2=dashed
+  series: ISeriesApi<"Line"> | null;
+  pane: any; // IPaneApi
+}
+
+// Bollinger Bands Instance
+interface BBInstance {
+  id: string;
+  name: string;
+  color: string;
+  period: number;
+  stdDev: number;
+  lineWidth: number; // 1-4
+  lineStyle: number; // 0=solid, 1=dotted, 2=dashed (for bands, middle always solid)
+  upperSeries: ISeriesApi<"Line"> | null;
+  middleSeries: ISeriesApi<"Line"> | null;
+  lowerSeries: ISeriesApi<"Line"> | null;
+}
+
+// MACD Instance
+interface MACDInstance {
+  id: string;
+  name: string;
+  color: string;
+  fastPeriod: number;
+  slowPeriod: number;
+  signalPeriod: number;
+  lineWidth: number; // 1-4
+  lineStyle: number; // 0=solid, 1=dotted, 2=dashed
+  macdSeries: ISeriesApi<"Line"> | null;
+  signalSeries: ISeriesApi<"Line"> | null;
+  histogramSeries: ISeriesApi<"Histogram"> | null;
+  pane: any; // IPaneApi
+}
+
+// Volume Profile Instance
+interface VolumeProfileInstance {
+  id: string;
+  name: string;
+  color: string;
+  rowCount: number;
+  visible: boolean;
+}
+
+// Anchored VWAP Instance
+interface AnchoredVWAPInstance {
+  id: string;
+  name: string;
+  color: string;
+  anchorTime: number; // Unix timestamp for anchor point
+  source: VWAPSource;
+  lineWidth: number; // 1-4
+  lineStyle: number; // 0=solid, 1=dotted, 2=dashed
+  // Standard deviation bands (like regular VWAP)
+  showBands: boolean;
+  bandMult1: number;
+  bandMult2: number;
+  bandMult3: number;
+  showBand1: boolean;
+  showBand2: boolean;
+  showBand3: boolean;
+  bandColor1: string;
+  bandColor2: string;
+  bandColor3: string;
+  bandLineWidth1: number;
+  bandLineStyle1: number;
+  bandLineWidth2: number;
+  bandLineStyle2: number;
+  bandLineWidth3: number;
+  bandLineStyle3: number;
+  // Series refs
+  series: ISeriesApi<"Line"> | null;
+  upperBand1: ISeriesApi<"Line"> | null;
+  lowerBand1: ISeriesApi<"Line"> | null;
+  upperBand2: ISeriesApi<"Line"> | null;
+  lowerBand2: ISeriesApi<"Line"> | null;
+  upperBand3: ISeriesApi<"Line"> | null;
+  lowerBand3: ISeriesApi<"Line"> | null;
+}
+
+// Color palettes for indicator instances
+const INDICATOR_COLORS = [
+  '#22d3ee', // Cyan
+  '#a855f7', // Purple
+  '#f59e0b', // Amber
+  '#ec4899', // Pink
+  '#10b981', // Emerald
+  '#3b82f6', // Blue
+  '#f97316', // Orange
+  '#ef4444', // Red
+];
+
+const VWAP_COLORS = INDICATOR_COLORS;
 
 // Available trading symbols
 const AVAILABLE_SYMBOLS = [
@@ -136,38 +297,22 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const smaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const emaSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const rsiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const bbUpperSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const bbLowerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const bbMiddleSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const macdLineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const macdSignalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const macdHistogramSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const rsiPaneRef = useRef<any>(null); // IPaneApi
-  const macdPaneRef = useRef<any>(null); // IPaneApi
+  // All indicator instances stored in state (series refs inside each instance)
   const [isLoading, setIsLoading] = useState(true);
   const [showVolume, setShowVolume] = useState(true);
-  const [showVWAP, setShowVWAP] = useState(false);
-  const [showVolumeProfile, setShowVolumeProfile] = useState(false);
+  // Multiple indicator instances
+  const [vwapInstances, setVwapInstances] = useState<VWAPInstance[]>([]);
+  const [smaInstances, setSmaInstances] = useState<SMAInstance[]>([]);
+  const [emaInstances, setEmaInstances] = useState<EMAInstance[]>([]);
+  const [rsiInstances, setRsiInstances] = useState<RSIInstance[]>([]);
+  const [bbInstances, setBbInstances] = useState<BBInstance[]>([]);
+  const [macdInstances, setMacdInstances] = useState<MACDInstance[]>([]);
+  const [volumeProfileInstances, setVolumeProfileInstances] = useState<VolumeProfileInstance[]>([]);
+  const [anchoredVwapInstances, setAnchoredVwapInstances] = useState<AnchoredVWAPInstance[]>([]);
   const [volumeProfile, setVolumeProfile] = useState<{ price: number; volume: number; pct: number }[]>([]);
   const [volumeProfileRenderKey, setVolumeProfileRenderKey] = useState(0); // Force re-render on scale change
-  const [showSMA, setShowSMA] = useState(false);
-  const [smaPeriod, setSmaPeriod] = useState(20);
-  const [showEMA, setShowEMA] = useState(false);
-  const [emaPeriod, setEmaPeriod] = useState(9);
-  const [showRSI, setShowRSI] = useState(false);
-  const [rsiPeriod, setRsiPeriod] = useState(14);
-  const [showBB, setShowBB] = useState(false);
-  const [bbPeriod, setBbPeriod] = useState(20);
-  const [bbStdDev, setBbStdDev] = useState(2);
-  const [showMACD, setShowMACD] = useState(false);
-  const [macdFast, setMacdFast] = useState(12);
-  const [macdSlow, setMacdSlow] = useState(26);
-  const [macdSignal, setMacdSignal] = useState(9);
-  const [expandedGroup, setExpandedGroup] = useState<'indicators' | 'drawing' | 'settings' | null>('drawing');
+  const [expandedGroup, setExpandedGroup] = useState<'indicators' | 'active' | 'drawing' | 'settings' | null>(null);
+  const [activeIndicatorSettings, setActiveIndicatorSettings] = useState<string | null>(null); // Which indicator's settings are expanded
   const [draggingOrder, setDraggingOrder] = useState<{orderId: string, priceType: 'limit' | 'stop'} | null>(null);
   const [draggingTPSL, setDraggingTPSL] = useState<{
     positionId: string;
@@ -266,7 +411,7 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
   };
 
   // Drawing tools state
-  type DrawingMode = 'none' | 'horizontal' | 'trendline' | 'rectangle' | 'circle' | 'fibonacci' | 'pitchfork' | 'arrow';
+  type DrawingMode = 'none' | 'horizontal' | 'trendline' | 'rectangle' | 'circle' | 'fibonacci' | 'pitchfork' | 'arrow' | 'anchored_vwap';
   type LineStyle = 'solid' | 'dashed' | 'dotted';
   type LineWidth = 1 | 2 | 3 | 4;
   type TextPosition = 'left' | 'center' | 'right';
@@ -358,6 +503,8 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
   const [draggingFibonacci, setDraggingFibonacci] = useState<{ id: string; point: 'start' | 'end' | 'whole' } | null>(null);
   const [draggingPitchfork, setDraggingPitchfork] = useState<{ id: string; point: 'p1' | 'p2' | 'p3' | 'whole' } | null>(null);
   const [draggingArrow, setDraggingArrow] = useState<{ id: string; point: 'start' | 'end' | 'whole' } | null>(null);
+  const [draggingAnchoredVwap, setDraggingAnchoredVwap] = useState<string | null>(null); // Instance ID being dragged
+  const [selectedAnchoredVwap, setSelectedAnchoredVwap] = useState<string | null>(null); // Instance ID with visible anchor marker
 
   // Active drawing state (for click-and-drag UX)
   const [activeDrawing, setActiveDrawing] = useState<{
@@ -434,6 +581,86 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
 
   // State for adding new saved preset
   const [newPresetName, setNewPresetName] = useState('');
+
+  // ============== Indicator Presets ==============
+  type IndicatorType = 'sma' | 'ema' | 'bb' | 'vwap' | 'avwap' | 'rsi' | 'macd';
+  type IndicatorPreset = {
+    name: string;
+    color: string;
+    lineWidth: number;
+    lineStyle: number;
+    // Type-specific settings
+    period?: number;        // SMA, EMA, RSI, BB
+    stdDev?: number;        // BB
+    anchorPeriod?: string;  // VWAP
+    source?: string;        // VWAP
+    showBands?: boolean;    // VWAP
+    showBand1?: boolean;    // VWAP
+    showBand2?: boolean;    // VWAP
+    showBand3?: boolean;    // VWAP
+    bandColor1?: string;    // VWAP
+    bandColor2?: string;    // VWAP
+    bandColor3?: string;    // VWAP
+    bandLineWidth1?: number; // VWAP
+    bandLineStyle1?: number; // VWAP
+    bandLineWidth2?: number; // VWAP
+    bandLineStyle2?: number; // VWAP
+    bandLineWidth3?: number; // VWAP
+    bandLineStyle3?: number; // VWAP
+    bandMultiplier1?: number; // VWAP
+    bandMultiplier2?: number; // VWAP
+    bandMultiplier3?: number; // VWAP
+    overbought?: number;    // RSI
+    oversold?: number;      // RSI
+    fastPeriod?: number;    // MACD
+    slowPeriod?: number;    // MACD
+    signalPeriod?: number;  // MACD
+  };
+  const [indicatorPresets, setIndicatorPresets] = useState<Record<IndicatorType, IndicatorPreset[]>>(() => {
+    // Default presets per indicator type
+    const defaults: Record<IndicatorType, IndicatorPreset[]> = {
+      sma: [
+        { name: 'SMA 20', color: '#22d3ee', lineWidth: 2, lineStyle: 0, period: 20 },
+        { name: 'SMA 50', color: '#a855f7', lineWidth: 2, lineStyle: 0, period: 50 },
+        { name: 'SMA 200', color: '#f59e0b', lineWidth: 2, lineStyle: 0, period: 200 },
+      ],
+      ema: [
+        { name: 'EMA 9', color: '#ec4899', lineWidth: 2, lineStyle: 0, period: 9 },
+        { name: 'EMA 21', color: '#10b981', lineWidth: 2, lineStyle: 0, period: 21 },
+      ],
+      bb: [
+        { name: 'BB 20,2', color: '#f59e0b', lineWidth: 1, lineStyle: 2, period: 20, stdDev: 2 },
+      ],
+      vwap: [
+        { name: 'Daily VWAP', color: '#22d3ee', lineWidth: 2, lineStyle: 0, anchorPeriod: 'Session' },
+        { name: 'Weekly VWAP', color: '#a855f7', lineWidth: 2, lineStyle: 0, anchorPeriod: 'Week' },
+      ],
+      avwap: [],
+      rsi: [
+        { name: 'RSI 14', color: '#ec4899', lineWidth: 2, lineStyle: 0, period: 14, overbought: 70, oversold: 30 },
+      ],
+      macd: [
+        { name: 'MACD 12,26,9', color: '#3b82f6', lineWidth: 2, lineStyle: 0, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9 },
+      ],
+    };
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('chartIndicatorPresets');
+      if (saved) {
+        // Merge saved with defaults to ensure all keys exist
+        const parsed = JSON.parse(saved);
+        return { ...defaults, ...parsed };
+      }
+    }
+    return defaults;
+  });
+
+  // Save indicator presets to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem('chartIndicatorPresets', JSON.stringify(indicatorPresets));
+  }, [indicatorPresets]);
+
+  // State for adding new indicator preset
+  const [newIndicatorPresetName, setNewIndicatorPresetName] = useState('');
 
   // Helper to convert hex to rgba
   const hexToRgba = (hex: string, alpha: number) => {
@@ -569,85 +796,10 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
 
     volumeSeriesRef.current = volumeSeries;
 
-    // Create VWAP line series (hidden by default)
-    const vwapSeries = chart.addSeries(LineSeries, {
-      color: '#f59e0b', // Amber color for VWAP
-      lineWidth: 2,
-      lineStyle: 0, // Solid
-      priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerVisible: true,
-      visible: false, // Hidden by default
-    });
-    vwapSeriesRef.current = vwapSeries;
+    // VWAP series are now created dynamically via addVwapInstance()
 
-    // Create SMA line series (hidden by default)
-    const smaSeries = chart.addSeries(LineSeries, {
-      color: '#22d3ee', // Cyan color for SMA
-      lineWidth: 2,
-      lineStyle: 0,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerVisible: true,
-      visible: false,
-    });
-    smaSeriesRef.current = smaSeries;
-
-    // Create EMA line series (hidden by default)
-    const emaSeries = chart.addSeries(LineSeries, {
-      color: '#a855f7', // Purple color for EMA
-      lineWidth: 2,
-      lineStyle: 0,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerVisible: true,
-      visible: false,
-    });
-    emaSeriesRef.current = emaSeries;
-
-    // RSI pane will be created dynamically when needed
-    rsiPaneRef.current = null;
-    rsiSeriesRef.current = null;
-
-    // Create Bollinger Bands series (hidden by default)
-    const bbUpperSeries = chart.addSeries(LineSeries, {
-      color: 'rgba(251, 191, 36, 0.7)', // Amber for upper band
-      lineWidth: 1,
-      lineStyle: 0,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-      visible: false,
-    });
-    bbUpperSeriesRef.current = bbUpperSeries;
-
-    const bbMiddleSeries = chart.addSeries(LineSeries, {
-      color: 'rgba(251, 191, 36, 0.9)', // Amber for middle band (SMA)
-      lineWidth: 1,
-      lineStyle: 2, // Dashed
-      priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerVisible: true,
-      visible: false,
-    });
-    bbMiddleSeriesRef.current = bbMiddleSeries;
-
-    const bbLowerSeries = chart.addSeries(LineSeries, {
-      color: 'rgba(251, 191, 36, 0.7)', // Amber for lower band
-      lineWidth: 1,
-      lineStyle: 0,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-      visible: false,
-    });
-    bbLowerSeriesRef.current = bbLowerSeries;
-
-    // MACD pane will be created dynamically when needed
-    macdPaneRef.current = null;
-    macdLineSeriesRef.current = null;
-    macdSignalSeriesRef.current = null;
-    macdHistogramSeriesRef.current = null;
+    // All indicator series (SMA, EMA, RSI, BB, MACD) are now created dynamically
+    // when instances are added via the add*Instance() functions
 
     // Add watermark with neon gradient effect (using multiple lines for glow simulation)
     try {
@@ -786,244 +938,368 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
     }
   }, [chartSettings]);
 
-  // Sync indicator visibility with state
+
+  // Recalculate all VWAP instances when they change or candle data changes
   useEffect(() => {
-    if (smaSeriesRef.current) {
-      smaSeriesRef.current.applyOptions({ visible: showSMA });
-    }
-  }, [showSMA]);
+    if (vwapInstances.length === 0 || candleDataRef.current.length === 0) return;
 
-  useEffect(() => {
-    if (emaSeriesRef.current) {
-      emaSeriesRef.current.applyOptions({ visible: showEMA });
-    }
-  }, [showEMA]);
+    const candles: Candle<any>[] = candleDataRef.current.map((c: any) => ({
+      time: c.time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume || 1,
+    }));
 
-  useEffect(() => {
-    console.log('[RSI Toggle] showRSI:', showRSI, 'chartRef:', !!chartRef.current);
-    if (!chartRef.current) return;
+    // Calculate and update each VWAP instance
+    for (const instance of vwapInstances) {
+      if (!instance.mainSeries) continue;
 
-    if (showRSI && !rsiPaneRef.current) {
-      // Create RSI pane
-      console.log('[RSI] Creating RSI pane');
-      const rsiPane = chartRef.current.addPane();
-      rsiPaneRef.current = rsiPane;
-
-      // Add RSI series to the pane
-      const rsiSeries = rsiPane.addSeries(LineSeries, {
-        color: '#f472b6', // Pink color for RSI
-        lineWidth: 2,
-        lineStyle: 0,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerVisible: true,
-        priceFormat: {
-          type: 'custom',
-          formatter: (price: number) => price.toFixed(0),
-        },
+      const vwapResults = calculateVWAP(candles, {
+        anchorPeriod: instance.anchorPeriod,
+        source: instance.source,
+        showBands: instance.showBands,
+        bandMultiplier1: instance.bandMult1,
+        bandMultiplier2: instance.bandMult2,
+        bandMultiplier3: instance.bandMult3,
+        showBand1: instance.showBand1,
+        showBand2: instance.showBand2,
+        showBand3: instance.showBand3,
       });
-      rsiSeriesRef.current = rsiSeries;
 
-      // Calculate and set RSI data if we have candle data
-      if (candleDataRef.current.length > 0) {
-        const gains: number[] = [];
-        const losses: number[] = [];
-        const rsiData: { time: any; value: number }[] = [];
+      const vwapData = vwapToLineSeries(vwapResults);
+      instance.mainSeries.setData(vwapData);
 
-        for (let i = 1; i < candleDataRef.current.length; i++) {
-          const change = candleDataRef.current[i].close - candleDataRef.current[i - 1].close;
-          gains.push(change > 0 ? change : 0);
-          losses.push(change < 0 ? -change : 0);
+      // Ensure main line has correct styles
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      instance.mainSeries.applyOptions({
+        color: instance.color,
+        lineWidth: instance.lineWidth,
+        lineStyle: instance.lineStyle,
+      } as any);
 
-          if (i >= rsiPeriod) {
-            const avgGain = gains.slice(i - rsiPeriod, i).reduce((a, b) => a + b, 0) / rsiPeriod;
-            const avgLoss = losses.slice(i - rsiPeriod, i).reduce((a, b) => a + b, 0) / rsiPeriod;
-            const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-            const rsi = 100 - (100 / (1 + rs));
-            rsiData.push({ time: candleDataRef.current[i].time, value: rsi });
-          }
+      // Update band visibility, colors, and styles
+      const band1Opts = {
+        visible: instance.showBands && instance.showBand1,
+        color: instance.bandColor1,
+        lineWidth: instance.bandLineWidth1,
+        lineStyle: instance.bandLineStyle1,
+      };
+      const band2Opts = {
+        visible: instance.showBands && instance.showBand2,
+        color: instance.bandColor2,
+        lineWidth: instance.bandLineWidth2,
+        lineStyle: instance.bandLineStyle2,
+      };
+      const band3Opts = {
+        visible: instance.showBands && instance.showBand3,
+        color: instance.bandColor3,
+        lineWidth: instance.bandLineWidth3,
+        lineStyle: instance.bandLineStyle3,
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (instance.upperBand1) instance.upperBand1.applyOptions(band1Opts as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (instance.lowerBand1) instance.lowerBand1.applyOptions(band1Opts as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (instance.upperBand2) instance.upperBand2.applyOptions(band2Opts as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (instance.lowerBand2) instance.lowerBand2.applyOptions(band2Opts as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (instance.upperBand3) instance.upperBand3.applyOptions(band3Opts as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (instance.lowerBand3) instance.lowerBand3.applyOptions(band3Opts as any);
+
+      // Set band data
+      if (instance.showBands) {
+        if (instance.showBand1 && instance.upperBand1 && instance.lowerBand1) {
+          instance.upperBand1.setData(vwapBandsToLineSeries(vwapResults, 1, 'upper'));
+          instance.lowerBand1.setData(vwapBandsToLineSeries(vwapResults, 1, 'lower'));
         }
-        console.log('[RSI] Setting data:', rsiData.length, 'points');
-        rsiSeries.setData(rsiData);
+        if (instance.showBand2 && instance.upperBand2 && instance.lowerBand2) {
+          instance.upperBand2.setData(vwapBandsToLineSeries(vwapResults, 2, 'upper'));
+          instance.lowerBand2.setData(vwapBandsToLineSeries(vwapResults, 2, 'lower'));
+        }
+        if (instance.showBand3 && instance.upperBand3 && instance.lowerBand3) {
+          instance.upperBand3.setData(vwapBandsToLineSeries(vwapResults, 3, 'upper'));
+          instance.lowerBand3.setData(vwapBandsToLineSeries(vwapResults, 3, 'lower'));
+        }
+      }
+    }
+  }, [vwapInstances]);
+
+  // Calculate Anchored VWAP instances
+  useEffect(() => {
+    if (anchoredVwapInstances.length === 0 || candleDataRef.current.length === 0) return;
+
+    const candles: Candle<any>[] = candleDataRef.current.map((c: any) => ({
+      time: c.time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume || 1,
+    }));
+
+    // Calculate and update each Anchored VWAP instance
+    for (const instance of anchoredVwapInstances) {
+      if (!instance.series) continue;
+
+      const avwapResults = calculateAnchoredVWAP(candles, {
+        anchorTime: instance.anchorTime,
+        source: instance.source,
+        resetOnSession: false,
+        showBands: instance.showBands,
+        bandMultiplier1: instance.bandMult1,
+        bandMultiplier2: instance.bandMult2,
+        bandMultiplier3: instance.bandMult3,
+        showBand1: instance.showBand1,
+        showBand2: instance.showBand2,
+        showBand3: instance.showBand3,
+      });
+
+      const avwapData = anchoredVwapToLineSeries(avwapResults);
+      instance.series.setData(avwapData);
+
+      // Apply main line styles
+      instance.series.applyOptions({
+        color: instance.color,
+        lineWidth: instance.lineWidth,
+        lineStyle: instance.lineStyle,
+      } as any);
+
+      // Update band visibility, colors, and styles
+      const band1Opts = {
+        visible: instance.showBands && instance.showBand1,
+        color: instance.bandColor1,
+        lineWidth: instance.bandLineWidth1,
+        lineStyle: instance.bandLineStyle1,
+      };
+      const band2Opts = {
+        visible: instance.showBands && instance.showBand2,
+        color: instance.bandColor2,
+        lineWidth: instance.bandLineWidth2,
+        lineStyle: instance.bandLineStyle2,
+      };
+      const band3Opts = {
+        visible: instance.showBands && instance.showBand3,
+        color: instance.bandColor3,
+        lineWidth: instance.bandLineWidth3,
+        lineStyle: instance.bandLineStyle3,
+      };
+
+      if (instance.upperBand1) instance.upperBand1.applyOptions(band1Opts as any);
+      if (instance.lowerBand1) instance.lowerBand1.applyOptions(band1Opts as any);
+      if (instance.upperBand2) instance.upperBand2.applyOptions(band2Opts as any);
+      if (instance.lowerBand2) instance.lowerBand2.applyOptions(band2Opts as any);
+      if (instance.upperBand3) instance.upperBand3.applyOptions(band3Opts as any);
+      if (instance.lowerBand3) instance.lowerBand3.applyOptions(band3Opts as any);
+
+      // Set band data
+      if (instance.showBands) {
+        if (instance.showBand1 && instance.upperBand1 && instance.lowerBand1) {
+          instance.upperBand1.setData(anchoredVwapBandsToLineSeries(avwapResults, 1, 'upper'));
+          instance.lowerBand1.setData(anchoredVwapBandsToLineSeries(avwapResults, 1, 'lower'));
+        }
+        if (instance.showBand2 && instance.upperBand2 && instance.lowerBand2) {
+          instance.upperBand2.setData(anchoredVwapBandsToLineSeries(avwapResults, 2, 'upper'));
+          instance.lowerBand2.setData(anchoredVwapBandsToLineSeries(avwapResults, 2, 'lower'));
+        }
+        if (instance.showBand3 && instance.upperBand3 && instance.lowerBand3) {
+          instance.upperBand3.setData(anchoredVwapBandsToLineSeries(avwapResults, 3, 'upper'));
+          instance.lowerBand3.setData(anchoredVwapBandsToLineSeries(avwapResults, 3, 'lower'));
+        }
+      }
+    }
+  }, [anchoredVwapInstances]);
+
+  // Calculate SMA instances
+  useEffect(() => {
+    if (smaInstances.length === 0 || candleDataRef.current.length === 0) return;
+    const closes = candleDataRef.current.map((c: any) => c.close);
+
+    for (const instance of smaInstances) {
+      if (!instance.series) continue;
+      const smaData = candleDataRef.current.map((candle: any, i: number) => {
+        if (i < instance.period - 1) return null;
+        const sum = closes.slice(i - instance.period + 1, i + 1).reduce((a: number, b: number) => a + b, 0);
+        return { time: candle.time, value: sum / instance.period };
+      }).filter(Boolean);
+      instance.series.setData(smaData as any);
+    }
+  }, [smaInstances]);
+
+  // Calculate EMA instances
+  useEffect(() => {
+    if (emaInstances.length === 0 || candleDataRef.current.length === 0) return;
+
+    for (const instance of emaInstances) {
+      if (!instance.series) continue;
+      const multiplier = 2 / (instance.period + 1);
+      let ema: number | null = null;
+      const emaData = candleDataRef.current.map((candle: any, i: number) => {
+        if (i < instance.period - 1) return null;
+        if (ema === null) {
+          const sum = candleDataRef.current.slice(0, instance.period).reduce((a: number, c: any) => a + c.close, 0);
+          ema = sum / instance.period;
+        } else {
+          ema = (candle.close - ema) * multiplier + ema;
+        }
+        return { time: candle.time, value: ema };
+      }).filter(Boolean);
+      instance.series.setData(emaData as any);
+    }
+  }, [emaInstances]);
+
+  // Calculate RSI instances
+  useEffect(() => {
+    if (rsiInstances.length === 0 || candleDataRef.current.length === 0) return;
+
+    for (const instance of rsiInstances) {
+      if (!instance.series) continue;
+      const gains: number[] = [];
+      const losses: number[] = [];
+      const rsiData: { time: any; value: number }[] = [];
+
+      for (let i = 1; i < candleDataRef.current.length; i++) {
+        const change = candleDataRef.current[i].close - candleDataRef.current[i - 1].close;
+        gains.push(change > 0 ? change : 0);
+        losses.push(change < 0 ? -change : 0);
+
+        if (i >= instance.period) {
+          const avgGain = gains.slice(i - instance.period, i).reduce((a, b) => a + b, 0) / instance.period;
+          const avgLoss = losses.slice(i - instance.period, i).reduce((a, b) => a + b, 0) / instance.period;
+          const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+          const rsi = 100 - (100 / (1 + rs));
+          rsiData.push({ time: candleDataRef.current[i].time, value: rsi });
+        }
+      }
+      instance.series.setData(rsiData);
+    }
+  }, [rsiInstances]);
+
+  // Calculate Bollinger Bands instances
+  useEffect(() => {
+    if (bbInstances.length === 0 || candleDataRef.current.length === 0) return;
+    const closes = candleDataRef.current.map((c: any) => c.close);
+
+    for (const instance of bbInstances) {
+      if (!instance.upperSeries || !instance.middleSeries || !instance.lowerSeries) continue;
+
+      const bbUpperData: { time: any; value: number }[] = [];
+      const bbMiddleData: { time: any; value: number }[] = [];
+      const bbLowerData: { time: any; value: number }[] = [];
+
+      for (let i = instance.period - 1; i < candleDataRef.current.length; i++) {
+        const slice = closes.slice(i - instance.period + 1, i + 1);
+        const sma = slice.reduce((a: number, b: number) => a + b, 0) / instance.period;
+        const squaredDiffs = slice.map((v: number) => Math.pow(v - sma, 2));
+        const variance = squaredDiffs.reduce((a: number, b: number) => a + b, 0) / instance.period;
+        const stdDev = Math.sqrt(variance);
+
+        bbMiddleData.push({ time: candleDataRef.current[i].time, value: sma });
+        bbUpperData.push({ time: candleDataRef.current[i].time, value: sma + instance.stdDev * stdDev });
+        bbLowerData.push({ time: candleDataRef.current[i].time, value: sma - instance.stdDev * stdDev });
       }
 
-      chartRef.current.timeScale().fitContent();
-    } else if (!showRSI && rsiPaneRef.current) {
-      // Remove RSI pane
-      console.log('[RSI] Removing RSI pane');
-      const panes = chartRef.current.panes();
-      const paneIndex = panes.indexOf(rsiPaneRef.current);
-      if (paneIndex > 0) { // Don't remove the main pane (index 0)
-        chartRef.current.removePane(paneIndex);
-      }
-      rsiPaneRef.current = null;
-      rsiSeriesRef.current = null;
+      instance.upperSeries.setData(bbUpperData);
+      instance.middleSeries.setData(bbMiddleData);
+      instance.lowerSeries.setData(bbLowerData);
     }
-  }, [showRSI, rsiPeriod]);
+  }, [bbInstances]);
 
+  // Calculate MACD instances
   useEffect(() => {
-    if (bbUpperSeriesRef.current && bbMiddleSeriesRef.current && bbLowerSeriesRef.current) {
-      bbUpperSeriesRef.current.applyOptions({ visible: showBB });
-      bbMiddleSeriesRef.current.applyOptions({ visible: showBB });
-      bbLowerSeriesRef.current.applyOptions({ visible: showBB });
-    }
-  }, [showBB]);
+    if (macdInstances.length === 0 || candleDataRef.current.length === 0) return;
+    const closes = candleDataRef.current.map((c: any) => c.close);
 
-  useEffect(() => {
-    if (vwapSeriesRef.current) {
-      vwapSeriesRef.current.applyOptions({ visible: showVWAP });
-    }
-  }, [showVWAP]);
+    for (const instance of macdInstances) {
+      if (!instance.macdSeries || !instance.signalSeries || !instance.histogramSeries) continue;
 
-  useEffect(() => {
-    console.log('[MACD Toggle] showMACD:', showMACD, 'chartRef:', !!chartRef.current);
-    if (!chartRef.current) return;
+      // Calculate fast EMA
+      const fastMultiplier = 2 / (instance.fastPeriod + 1);
+      let fastEma: number | null = null;
+      const fastEmaValues: number[] = [];
 
-    if (showMACD && !macdPaneRef.current) {
-      // Create MACD pane
-      console.log('[MACD] Creating MACD pane');
-      const macdPane = chartRef.current.addPane();
-      macdPaneRef.current = macdPane;
-
-      // Add MACD histogram series first (so it renders behind the lines)
-      const macdHistogramSeries = macdPane.addSeries(HistogramSeries, {
-        color: '#22c55e',
-        priceFormat: { type: 'price', precision: 2 },
-      });
-      macdHistogramSeriesRef.current = macdHistogramSeries;
-
-      // Add MACD line series
-      const macdLineSeries = macdPane.addSeries(LineSeries, {
-        color: '#3b82f6', // Blue for MACD line
-        lineWidth: 2,
-        lineStyle: 0,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerVisible: true,
-      });
-      macdLineSeriesRef.current = macdLineSeries;
-
-      // Add Signal line series
-      const macdSignalSeries = macdPane.addSeries(LineSeries, {
-        color: '#f97316', // Orange for signal line
-        lineWidth: 2,
-        lineStyle: 0,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerVisible: true,
-      });
-      macdSignalSeriesRef.current = macdSignalSeries;
-
-      // Calculate and set MACD data if we have candle data
-      if (candleDataRef.current.length > 0) {
-        const closes = candleDataRef.current.map((c: any) => c.close);
-
-        // Calculate fast EMA
-        const fastMultiplier = 2 / (macdFast + 1);
-        let fastEma: number | null = null;
-        const fastEmaValues: number[] = [];
-
-        for (let i = 0; i < closes.length; i++) {
-          if (i < macdFast - 1) {
-            fastEmaValues.push(0);
-          } else if (fastEma === null) {
-            fastEma = closes.slice(0, macdFast).reduce((a: number, b: number) => a + b, 0) / macdFast;
-            fastEmaValues.push(fastEma);
-          } else {
-            fastEma = (closes[i] - fastEma) * fastMultiplier + fastEma;
-            fastEmaValues.push(fastEma);
-          }
+      for (let i = 0; i < closes.length; i++) {
+        if (i < instance.fastPeriod - 1) {
+          fastEmaValues.push(0);
+        } else if (fastEma === null) {
+          fastEma = closes.slice(0, instance.fastPeriod).reduce((a: number, b: number) => a + b, 0) / instance.fastPeriod;
+          fastEmaValues.push(fastEma);
+        } else {
+          fastEma = (closes[i] - fastEma) * fastMultiplier + fastEma;
+          fastEmaValues.push(fastEma);
         }
-
-        // Calculate slow EMA
-        const slowMultiplier = 2 / (macdSlow + 1);
-        let slowEma: number | null = null;
-        const slowEmaValues: number[] = [];
-
-        for (let i = 0; i < closes.length; i++) {
-          if (i < macdSlow - 1) {
-            slowEmaValues.push(0);
-          } else if (slowEma === null) {
-            slowEma = closes.slice(0, macdSlow).reduce((a: number, b: number) => a + b, 0) / macdSlow;
-            slowEmaValues.push(slowEma);
-          } else {
-            slowEma = (closes[i] - slowEma) * slowMultiplier + slowEma;
-            slowEmaValues.push(slowEma);
-          }
-        }
-
-        // Calculate MACD line
-        const macdValues: number[] = [];
-        for (let i = 0; i < closes.length; i++) {
-          if (i < macdSlow - 1) {
-            macdValues.push(0);
-          } else {
-            macdValues.push(fastEmaValues[i] - slowEmaValues[i]);
-          }
-        }
-
-        // Calculate Signal line
-        const signalMultiplier = 2 / (macdSignal + 1);
-        let signalEma: number | null = null;
-        const signalValues: number[] = [];
-        const startIndex = macdSlow - 1;
-
-        for (let i = 0; i < closes.length; i++) {
-          if (i < startIndex + macdSignal - 1) {
-            signalValues.push(0);
-          } else if (signalEma === null) {
-            signalEma = macdValues.slice(startIndex, startIndex + macdSignal).reduce((a, b) => a + b, 0) / macdSignal;
-            signalValues.push(signalEma);
-          } else {
-            signalEma = (macdValues[i] - signalEma) * signalMultiplier + signalEma;
-            signalValues.push(signalEma);
-          }
-        }
-
-        // Build data arrays
-        const macdLineData: { time: any; value: number }[] = [];
-        const macdSignalData: { time: any; value: number }[] = [];
-        const macdHistogramData: { time: any; value: number; color: string }[] = [];
-
-        for (let i = startIndex + macdSignal - 1; i < candleDataRef.current.length; i++) {
-          const time = candleDataRef.current[i].time;
-          const macdValue = macdValues[i];
-          const signalValue = signalValues[i];
-          const histogram = macdValue - signalValue;
-
-          macdLineData.push({ time, value: macdValue });
-          macdSignalData.push({ time, value: signalValue });
-          macdHistogramData.push({
-            time,
-            value: histogram,
-            color: histogram >= 0 ? '#22c55e' : '#ef4444',
-          });
-        }
-
-        console.log('[MACD] Setting data:', macdLineData.length, 'points');
-        macdLineSeries.setData(macdLineData);
-        macdSignalSeries.setData(macdSignalData);
-        macdHistogramSeries.setData(macdHistogramData);
       }
 
-      chartRef.current.timeScale().fitContent();
-    } else if (!showMACD && macdPaneRef.current) {
-      // Remove MACD pane
-      console.log('[MACD] Removing MACD pane');
-      const panes = chartRef.current.panes();
-      const paneIndex = panes.indexOf(macdPaneRef.current);
-      if (paneIndex > 0) {
-        chartRef.current.removePane(paneIndex);
-      }
-      macdPaneRef.current = null;
-      macdLineSeriesRef.current = null;
-      macdSignalSeriesRef.current = null;
-      macdHistogramSeriesRef.current = null;
-    }
-  }, [showMACD, macdFast, macdSlow, macdSignal]);
+      // Calculate slow EMA
+      const slowMultiplier = 2 / (instance.slowPeriod + 1);
+      let slowEma: number | null = null;
+      const slowEmaValues: number[] = [];
 
-  // Note: Pane layout is now handled automatically by lightweight-charts v5
-  // when using addPane() to create separate indicator panes
+      for (let i = 0; i < closes.length; i++) {
+        if (i < instance.slowPeriod - 1) {
+          slowEmaValues.push(0);
+        } else if (slowEma === null) {
+          slowEma = closes.slice(0, instance.slowPeriod).reduce((a: number, b: number) => a + b, 0) / instance.slowPeriod;
+          slowEmaValues.push(slowEma);
+        } else {
+          slowEma = (closes[i] - slowEma) * slowMultiplier + slowEma;
+          slowEmaValues.push(slowEma);
+        }
+      }
+
+      // Calculate MACD line
+      const macdValues: number[] = [];
+      for (let i = 0; i < closes.length; i++) {
+        if (i < instance.slowPeriod - 1) {
+          macdValues.push(0);
+        } else {
+          macdValues.push(fastEmaValues[i] - slowEmaValues[i]);
+        }
+      }
+
+      // Calculate Signal line
+      const signalMultiplier = 2 / (instance.signalPeriod + 1);
+      let signalEma: number | null = null;
+      const signalValues: number[] = [];
+      const startIndex = instance.slowPeriod - 1;
+
+      for (let i = 0; i < closes.length; i++) {
+        if (i < startIndex + instance.signalPeriod - 1) {
+          signalValues.push(0);
+        } else if (signalEma === null) {
+          signalEma = macdValues.slice(startIndex, startIndex + instance.signalPeriod).reduce((a, b) => a + b, 0) / instance.signalPeriod;
+          signalValues.push(signalEma);
+        } else {
+          signalEma = (macdValues[i] - signalEma) * signalMultiplier + signalEma;
+          signalValues.push(signalEma);
+        }
+      }
+
+      // Build data arrays
+      const macdLineData: { time: any; value: number }[] = [];
+      const macdSignalData: { time: any; value: number }[] = [];
+      const macdHistogramData: { time: any; value: number; color: string }[] = [];
+
+      for (let i = startIndex + instance.signalPeriod - 1; i < candleDataRef.current.length; i++) {
+        const time = candleDataRef.current[i].time;
+        const macdValue = macdValues[i];
+        const signalValue = signalValues[i];
+        const histogram = macdValue - signalValue;
+
+        macdLineData.push({ time, value: macdValue });
+        macdSignalData.push({ time, value: signalValue });
+        macdHistogramData.push({ time, value: histogram, color: histogram >= 0 ? '#22c55e' : '#ef4444' });
+      }
+
+      instance.macdSeries.setData(macdLineData);
+      instance.signalSeries.setData(macdSignalData);
+      instance.histogramSeries.setData(macdHistogramData);
+    }
+  }, [macdInstances]);
 
   // Fetch and set candle data
   useEffect(() => {
@@ -1053,91 +1329,8 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
             volumeSeriesRef.current.setData(volumeData);
           }
 
-          // Calculate and set VWAP data
-          if (vwapSeriesRef.current) {
-            let cumulativeVP = 0; // Cumulative (Volume * Typical Price)
-            let cumulativeVolume = 0;
-            const vwapData = data.candles.map((candle: any) => {
-              const typicalPrice = (candle.high + candle.low + candle.close) / 3;
-              const volume = candle.volume || 1;
-              cumulativeVP += typicalPrice * volume;
-              cumulativeVolume += volume;
-              return {
-                time: candle.time,
-                value: cumulativeVP / cumulativeVolume,
-              };
-            });
-            console.log('[VWAP Debug] Calculated VWAP data:', {
-              dataPoints: vwapData.length,
-              firstValue: vwapData[0]?.value?.toFixed(2),
-              lastValue: vwapData[vwapData.length - 1]?.value?.toFixed(2),
-              cumulativeVolume,
-            });
-            vwapSeriesRef.current.setData(vwapData);
-          }
-
-          // Calculate and set SMA data
-          if (smaSeriesRef.current) {
-            const closes = data.candles.map((c: any) => c.close);
-            const smaData = data.candles.map((candle: any, i: number) => {
-              if (i < smaPeriod - 1) return null;
-              const sum = closes.slice(i - smaPeriod + 1, i + 1).reduce((a: number, b: number) => a + b, 0);
-              return {
-                time: candle.time,
-                value: sum / smaPeriod,
-              };
-            }).filter(Boolean);
-            smaSeriesRef.current.setData(smaData);
-          }
-
-          // Calculate and set EMA data
-          if (emaSeriesRef.current) {
-            const multiplier = 2 / (emaPeriod + 1);
-            let ema: number | null = null;
-            const emaData = data.candles.map((candle: any, i: number) => {
-              if (i < emaPeriod - 1) return null;
-              if (ema === null) {
-                // First EMA is just SMA
-                const sum = data.candles.slice(0, emaPeriod).reduce((a: number, c: any) => a + c.close, 0);
-                ema = sum / emaPeriod;
-              } else {
-                ema = (candle.close - ema) * multiplier + ema;
-              }
-              return {
-                time: candle.time,
-                value: ema,
-              };
-            }).filter(Boolean);
-            emaSeriesRef.current.setData(emaData);
-          }
-
-          // Note: RSI data is calculated when the RSI pane is created
-
-          // Calculate and set Bollinger Bands data
-          if (bbUpperSeriesRef.current && bbMiddleSeriesRef.current && bbLowerSeriesRef.current) {
-            const closes = data.candles.map((c: any) => c.close);
-            const bbUpperData: { time: any; value: number }[] = [];
-            const bbMiddleData: { time: any; value: number }[] = [];
-            const bbLowerData: { time: any; value: number }[] = [];
-
-            for (let i = bbPeriod - 1; i < data.candles.length; i++) {
-              const slice = closes.slice(i - bbPeriod + 1, i + 1);
-              const sma = slice.reduce((a: number, b: number) => a + b, 0) / bbPeriod;
-              const squaredDiffs = slice.map((v: number) => Math.pow(v - sma, 2));
-              const variance = squaredDiffs.reduce((a: number, b: number) => a + b, 0) / bbPeriod;
-              const stdDev = Math.sqrt(variance);
-
-              bbMiddleData.push({ time: data.candles[i].time, value: sma });
-              bbUpperData.push({ time: data.candles[i].time, value: sma + bbStdDev * stdDev });
-              bbLowerData.push({ time: data.candles[i].time, value: sma - bbStdDev * stdDev });
-            }
-
-            bbUpperSeriesRef.current.setData(bbUpperData);
-            bbMiddleSeriesRef.current.setData(bbMiddleData);
-            bbLowerSeriesRef.current.setData(bbLowerData);
-          }
-
-          // Note: MACD data is calculated when the MACD pane is created
+          // All indicator instances are calculated via their respective useEffects
+          // They trigger when instances change and candleData is available
 
           // Calculate Volume Profile (volume at each price level)
           const priceVolumes: Map<number, number> = new Map();
@@ -1863,6 +2056,65 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
 
   // Handle chart mousedown for drawing tools (click-and-drag UX)
   const handleChartMouseDown = (e: React.MouseEvent) => {
+    // Check if clicking on an Anchored VWAP line (when not in drawing mode)
+    if (drawingMode === 'none' && anchoredVwapInstances.length > 0 && chartContainerRef.current && chartRef.current && candlestickSeriesRef.current) {
+      const rect = chartContainerRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const clickPrice = candlestickSeriesRef.current.coordinateToPrice(y);
+      const clickTime = chartRef.current.timeScale().coordinateToTime(x);
+
+      if (clickPrice !== null && clickTime !== null) {
+        // Check if clicking near any Anchored VWAP line
+        for (const instance of anchoredVwapInstances) {
+          if (!instance.series) continue;
+
+          // Get the VWAP value at the clicked time
+          const data = candleDataRef.current;
+          const clickTimeNum = clickTime as number;
+
+          // Find the candle closest to click time
+          const candleIdx = data.findIndex(c => {
+            const t = typeof c.time === 'number' ? c.time : 0;
+            return t >= clickTimeNum;
+          });
+
+          if (candleIdx >= 0) {
+            // Calculate VWAP value at this point
+            const anchorIdx = data.findIndex(c => {
+              const t = typeof c.time === 'number' ? c.time : 0;
+              return t >= instance.anchorTime;
+            });
+
+            if (candleIdx >= anchorIdx && anchorIdx >= 0) {
+              // Get the approximate VWAP value using the series coordinate
+              const vwapY = instance.series.priceToCoordinate(clickPrice);
+              if (vwapY !== null) {
+                const priceAtVwap = instance.series.coordinateToPrice(y);
+                if (priceAtVwap !== null) {
+                  // Check if click is within 10 pixels of the line
+                  const priceDiff = Math.abs(clickPrice - priceAtVwap);
+                  const priceRange = Math.abs((candlestickSeriesRef.current.coordinateToPrice(0) || 0) - (candlestickSeriesRef.current.coordinateToPrice(100) || 0));
+                  const pixelThreshold = priceRange * 0.05; // 5% of visible price range
+
+                  if (priceDiff < pixelThreshold) {
+                    // Clicked on this AVWAP line - select it
+                    setSelectedAnchoredVwap(instance.id);
+                    return;
+                  }
+                }
+              }
+            }
+          }
+        }
+        // Clicked elsewhere - deselect
+        if (selectedAnchoredVwap) {
+          setSelectedAnchoredVwap(null);
+          return;
+        }
+      }
+    }
+
     if (drawingMode === 'none' || !candlestickSeriesRef.current || !chartContainerRef.current || !chartRef.current) return;
 
     const rect = chartContainerRef.current.getBoundingClientRect();
@@ -1958,6 +2210,9 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
       });
       setPendingArrow({ start: { time: time as number, price } });
       chartRef.current.applyOptions({ handleScroll: false, handleScale: false });
+    } else if (drawingMode === 'anchored_vwap' && time !== null) {
+      // Single click to place anchored VWAP anchor point
+      addAnchoredVwapInstance(time as number);
     }
   };
 
@@ -2614,15 +2869,660 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
 
   // Get cursor style based on drawing mode
   const getChartCursor = () => {
-    if (draggingOrder || draggingTPSL || draggingHLine || draggingTrendLine || draggingRectangle || draggingCircle || draggingFibonacci || draggingPitchfork || draggingArrow || activeDrawing) return 'grabbing';
+    if (draggingOrder || draggingTPSL || draggingHLine || draggingTrendLine || draggingRectangle || draggingCircle || draggingFibonacci || draggingPitchfork || draggingArrow || draggingAnchoredVwap || activeDrawing) return 'grabbing';
     if (drawingMode !== 'none') return 'crosshair';
     return 'default';
   };
 
+  // Add a new VWAP instance
+  const addVwapInstance = useCallback((anchorPeriod: VWAPAnchorPeriod = 'Session') => {
+    if (!chartRef.current) return;
+
+    const id = `vwap_${Date.now()}`;
+    const colorIndex = vwapInstances.length % VWAP_COLORS.length;
+    const color = VWAP_COLORS[colorIndex];
+    const name = anchorPeriod === 'Session' ? 'VWAP' : `VWAP (${anchorPeriod})`;
+
+    // Create series for this instance
+    const chart = chartRef.current;
+    const mainSeries = chart.addSeries(LineSeries, {
+      color,
+      lineWidth: 2,
+      lineStyle: 0,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    });
+
+    // Band colors (slightly transparent versions of main color)
+    const bandColor1 = '#22c55e'; // Green
+    const bandColor2 = '#eab308'; // Yellow
+    const bandColor3 = '#14b8a6'; // Teal
+
+    const upperBand1 = chart.addSeries(LineSeries, { color: bandColor1, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const lowerBand1 = chart.addSeries(LineSeries, { color: bandColor1, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const upperBand2 = chart.addSeries(LineSeries, { color: bandColor2, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const lowerBand2 = chart.addSeries(LineSeries, { color: bandColor2, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const upperBand3 = chart.addSeries(LineSeries, { color: bandColor3, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const lowerBand3 = chart.addSeries(LineSeries, { color: bandColor3, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+
+    const newInstance: VWAPInstance = {
+      id,
+      name,
+      color,
+      anchorPeriod,
+      source: 'hlc3',
+      showBands: false,
+      bandMult1: 1.0,
+      bandMult2: 2.0,
+      bandMult3: 3.0,
+      showBand1: true,
+      showBand2: false,
+      showBand3: false,
+      lineWidth: 2,
+      lineStyle: 0,
+      bandColor1,
+      bandColor2,
+      bandColor3,
+      bandLineWidth1: 1,
+      bandLineStyle1: 2,
+      bandLineWidth2: 1,
+      bandLineStyle2: 2,
+      bandLineWidth3: 1,
+      bandLineStyle3: 2,
+      mainSeries,
+      upperBand1,
+      lowerBand1,
+      upperBand2,
+      lowerBand2,
+      upperBand3,
+      lowerBand3,
+    };
+
+    setVwapInstances(prev => [...prev, newInstance]);
+  }, [vwapInstances.length]);
+
+  // Remove a VWAP instance
+  const removeVwapInstance = useCallback((instanceId: string) => {
+    setVwapInstances(prev => {
+      const instance = prev.find(i => i.id === instanceId);
+      if (instance && chartRef.current) {
+        // Remove all series from chart
+        try {
+          if (instance.mainSeries) chartRef.current.removeSeries(instance.mainSeries);
+          if (instance.upperBand1) chartRef.current.removeSeries(instance.upperBand1);
+          if (instance.lowerBand1) chartRef.current.removeSeries(instance.lowerBand1);
+          if (instance.upperBand2) chartRef.current.removeSeries(instance.upperBand2);
+          if (instance.lowerBand2) chartRef.current.removeSeries(instance.lowerBand2);
+          if (instance.upperBand3) chartRef.current.removeSeries(instance.upperBand3);
+          if (instance.lowerBand3) chartRef.current.removeSeries(instance.lowerBand3);
+        } catch (e) {
+          console.warn('Error removing VWAP series:', e);
+        }
+      }
+      return prev.filter(i => i.id !== instanceId);
+    });
+  }, []);
+
+  // Update a VWAP instance settings
+  const updateVwapInstance = useCallback((instanceId: string, updates: Partial<VWAPInstance>) => {
+    setVwapInstances(prev => prev.map(instance => {
+      if (instance.id !== instanceId) return instance;
+      const updated = { ...instance, ...updates };
+      // Update name if anchor period changed
+      if (updates.anchorPeriod) {
+        updated.name = updates.anchorPeriod === 'Session' ? 'VWAP' : `VWAP (${updates.anchorPeriod})`;
+      }
+      // Apply color change to main series
+      if (updates.color && instance.mainSeries) {
+        instance.mainSeries.applyOptions({ color: updates.color });
+      }
+      // Apply lineWidth/lineStyle to main series
+      if ((updates.lineWidth !== undefined || updates.lineStyle !== undefined) && instance.mainSeries) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        instance.mainSeries.applyOptions({
+          lineWidth: updates.lineWidth ?? instance.lineWidth,
+          lineStyle: updates.lineStyle ?? instance.lineStyle,
+        } as any);
+      }
+      // Apply band colors and styles for band 1
+      if (updates.bandColor1 || updates.bandLineWidth1 !== undefined || updates.bandLineStyle1 !== undefined) {
+        const bandOpts = {
+          color: updates.bandColor1 ?? instance.bandColor1,
+          lineWidth: updates.bandLineWidth1 ?? instance.bandLineWidth1,
+          lineStyle: updates.bandLineStyle1 ?? instance.bandLineStyle1,
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (instance.upperBand1) instance.upperBand1.applyOptions(bandOpts as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (instance.lowerBand1) instance.lowerBand1.applyOptions(bandOpts as any);
+      }
+      // Apply band colors and styles for band 2
+      if (updates.bandColor2 || updates.bandLineWidth2 !== undefined || updates.bandLineStyle2 !== undefined) {
+        const bandOpts = {
+          color: updates.bandColor2 ?? instance.bandColor2,
+          lineWidth: updates.bandLineWidth2 ?? instance.bandLineWidth2,
+          lineStyle: updates.bandLineStyle2 ?? instance.bandLineStyle2,
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (instance.upperBand2) instance.upperBand2.applyOptions(bandOpts as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (instance.lowerBand2) instance.lowerBand2.applyOptions(bandOpts as any);
+      }
+      // Apply band colors and styles for band 3
+      if (updates.bandColor3 || updates.bandLineWidth3 !== undefined || updates.bandLineStyle3 !== undefined) {
+        const bandOpts = {
+          color: updates.bandColor3 ?? instance.bandColor3,
+          lineWidth: updates.bandLineWidth3 ?? instance.bandLineWidth3,
+          lineStyle: updates.bandLineStyle3 ?? instance.bandLineStyle3,
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (instance.upperBand3) instance.upperBand3.applyOptions(bandOpts as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (instance.lowerBand3) instance.lowerBand3.applyOptions(bandOpts as any);
+      }
+      return updated;
+    }));
+  }, []);
+
+  // ============== Anchored VWAP Instance Helpers ==============
+  const addAnchoredVwapInstance = useCallback((anchorTime: number) => {
+    if (!chartRef.current) return;
+
+    const id = `avwap_${Date.now()}`;
+    const colorIndex = anchoredVwapInstances.length % INDICATOR_COLORS.length;
+    const color = INDICATOR_COLORS[colorIndex];
+
+    // Format anchor time for name
+    const anchorDate = new Date(anchorTime * 1000);
+    const name = `AVWAP (${anchorDate.toLocaleDateString()})`;
+
+    const chart = chartRef.current;
+
+    // Create main series
+    const series = chart.addSeries(LineSeries, {
+      color,
+      lineWidth: 2,
+      lineStyle: 0,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    });
+
+    // Band colors
+    const bandColor1 = '#22c55e'; // Green
+    const bandColor2 = '#eab308'; // Yellow
+    const bandColor3 = '#14b8a6'; // Teal
+
+    // Create band series (initially hidden)
+    const upperBand1 = chart.addSeries(LineSeries, { color: bandColor1, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const lowerBand1 = chart.addSeries(LineSeries, { color: bandColor1, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const upperBand2 = chart.addSeries(LineSeries, { color: bandColor2, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const lowerBand2 = chart.addSeries(LineSeries, { color: bandColor2, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const upperBand3 = chart.addSeries(LineSeries, { color: bandColor3, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+    const lowerBand3 = chart.addSeries(LineSeries, { color: bandColor3, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
+
+    const newInstance: AnchoredVWAPInstance = {
+      id,
+      name,
+      color,
+      anchorTime,
+      source: 'hlc3',
+      lineWidth: 2,
+      lineStyle: 0,
+      showBands: false,
+      bandMult1: 1.0,
+      bandMult2: 2.0,
+      bandMult3: 3.0,
+      showBand1: true,
+      showBand2: false,
+      showBand3: false,
+      bandColor1,
+      bandColor2,
+      bandColor3,
+      bandLineWidth1: 1,
+      bandLineStyle1: 2,
+      bandLineWidth2: 1,
+      bandLineStyle2: 2,
+      bandLineWidth3: 1,
+      bandLineStyle3: 2,
+      series,
+      upperBand1,
+      lowerBand1,
+      upperBand2,
+      lowerBand2,
+      upperBand3,
+      lowerBand3,
+    };
+
+    setAnchoredVwapInstances(prev => [...prev, newInstance]);
+    setDrawingMode('none'); // Exit anchored VWAP placement mode
+    toast.success(`Added ${name}`);
+  }, [anchoredVwapInstances.length]);
+
+  // Remove an Anchored VWAP instance
+  const removeAnchoredVwapInstance = useCallback((instanceId: string) => {
+    setAnchoredVwapInstances(prev => {
+      const instance = prev.find(i => i.id === instanceId);
+      if (instance && chartRef.current) {
+        try {
+          if (instance.series) chartRef.current.removeSeries(instance.series);
+          if (instance.upperBand1) chartRef.current.removeSeries(instance.upperBand1);
+          if (instance.lowerBand1) chartRef.current.removeSeries(instance.lowerBand1);
+          if (instance.upperBand2) chartRef.current.removeSeries(instance.upperBand2);
+          if (instance.lowerBand2) chartRef.current.removeSeries(instance.lowerBand2);
+          if (instance.upperBand3) chartRef.current.removeSeries(instance.upperBand3);
+          if (instance.lowerBand3) chartRef.current.removeSeries(instance.lowerBand3);
+        } catch (e) {
+          console.warn('Error removing Anchored VWAP series:', e);
+        }
+      }
+      return prev.filter(i => i.id !== instanceId);
+    });
+  }, []);
+
+  // Update an Anchored VWAP instance
+  const updateAnchoredVwapInstance = useCallback((instanceId: string, updates: Partial<AnchoredVWAPInstance>) => {
+    setAnchoredVwapInstances(prev => prev.map(instance => {
+      if (instance.id !== instanceId) return instance;
+      const updated = { ...instance, ...updates };
+
+      // Update name if anchor time changed
+      if (updates.anchorTime !== undefined) {
+        const anchorDate = new Date(updates.anchorTime * 1000);
+        updated.name = `AVWAP (${anchorDate.toLocaleDateString()})`;
+      }
+
+      // Apply color change to main series
+      if (updates.color && instance.series) {
+        instance.series.applyOptions({ color: updates.color });
+      }
+      // Apply lineWidth/lineStyle to main series
+      if ((updates.lineWidth !== undefined || updates.lineStyle !== undefined) && instance.series) {
+        instance.series.applyOptions({
+          lineWidth: updates.lineWidth ?? instance.lineWidth,
+          lineStyle: updates.lineStyle ?? instance.lineStyle,
+        } as any);
+      }
+      // Apply band 1 styles
+      if (updates.bandColor1 || updates.bandLineWidth1 !== undefined || updates.bandLineStyle1 !== undefined) {
+        const bandOpts = {
+          color: updates.bandColor1 ?? instance.bandColor1,
+          lineWidth: updates.bandLineWidth1 ?? instance.bandLineWidth1,
+          lineStyle: updates.bandLineStyle1 ?? instance.bandLineStyle1,
+        };
+        if (instance.upperBand1) instance.upperBand1.applyOptions(bandOpts as any);
+        if (instance.lowerBand1) instance.lowerBand1.applyOptions(bandOpts as any);
+      }
+      // Apply band 2 styles
+      if (updates.bandColor2 || updates.bandLineWidth2 !== undefined || updates.bandLineStyle2 !== undefined) {
+        const bandOpts = {
+          color: updates.bandColor2 ?? instance.bandColor2,
+          lineWidth: updates.bandLineWidth2 ?? instance.bandLineWidth2,
+          lineStyle: updates.bandLineStyle2 ?? instance.bandLineStyle2,
+        };
+        if (instance.upperBand2) instance.upperBand2.applyOptions(bandOpts as any);
+        if (instance.lowerBand2) instance.lowerBand2.applyOptions(bandOpts as any);
+      }
+      // Apply band 3 styles
+      if (updates.bandColor3 || updates.bandLineWidth3 !== undefined || updates.bandLineStyle3 !== undefined) {
+        const bandOpts = {
+          color: updates.bandColor3 ?? instance.bandColor3,
+          lineWidth: updates.bandLineWidth3 ?? instance.bandLineWidth3,
+          lineStyle: updates.bandLineStyle3 ?? instance.bandLineStyle3,
+        };
+        if (instance.upperBand3) instance.upperBand3.applyOptions(bandOpts as any);
+        if (instance.lowerBand3) instance.lowerBand3.applyOptions(bandOpts as any);
+      }
+      return updated;
+    }));
+  }, []);
+
+  // Handle global mouse events for Anchored VWAP anchor dragging
+  useEffect(() => {
+    if (!draggingAnchoredVwap || !chartRef.current || !chartContainerRef.current) return;
+
+    const container = chartContainerRef.current;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+
+      if (chartRef.current) {
+        const newTime = chartRef.current.timeScale().coordinateToTime(x);
+        if (newTime !== null) {
+          updateAnchoredVwapInstance(draggingAnchoredVwap, { anchorTime: newTime as number });
+        }
+      }
+      e.preventDefault();
+    };
+
+    const handleMouseUp = () => {
+      setDraggingAnchoredVwap(null);
+      if (chartRef.current) {
+        chartRef.current.applyOptions({ handleScroll: true, handleScale: true });
+      }
+      toast.success('Anchor point moved');
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [draggingAnchoredVwap, updateAnchoredVwapInstance]);
+
+  // ============== SMA Instance Helpers ==============
+  const addSmaInstance = useCallback((period: number = 20) => {
+    if (!chartRef.current) return;
+    const id = `sma_${Date.now()}`;
+    const colorIndex = smaInstances.length % INDICATOR_COLORS.length;
+    const color = INDICATOR_COLORS[colorIndex];
+    const series = chartRef.current.addSeries(LineSeries, {
+      color,
+      lineWidth: 2,
+      lineStyle: 0,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    });
+    const newInstance: SMAInstance = { id, name: `SMA (${period})`, color, period, lineWidth: 2, lineStyle: 0, series };
+    setSmaInstances(prev => [...prev, newInstance]);
+  }, [smaInstances.length]);
+
+  const removeSmaInstance = useCallback((instanceId: string) => {
+    setSmaInstances(prev => {
+      const instance = prev.find(i => i.id === instanceId);
+      if (instance?.series && chartRef.current) {
+        try { chartRef.current.removeSeries(instance.series); } catch (e) { console.warn('Error removing SMA series:', e); }
+      }
+      return prev.filter(i => i.id !== instanceId);
+    });
+  }, []);
+
+  const updateSmaInstance = useCallback((instanceId: string, updates: Partial<SMAInstance>) => {
+    setSmaInstances(prev => prev.map(instance => {
+      if (instance.id !== instanceId) return instance;
+      const updated = { ...instance, ...updates };
+      if (updates.period) updated.name = `SMA (${updates.period})`;
+      // Apply color/lineWidth/lineStyle changes to series
+      if (instance.series && (updates.color || updates.lineWidth !== undefined || updates.lineStyle !== undefined)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        instance.series.applyOptions({
+          color: updates.color ?? instance.color,
+          lineWidth: updates.lineWidth ?? instance.lineWidth,
+          lineStyle: updates.lineStyle ?? instance.lineStyle,
+        } as any);
+      }
+      return updated;
+    }));
+  }, []);
+
+  // ============== EMA Instance Helpers ==============
+  const addEmaInstance = useCallback((period: number = 9) => {
+    if (!chartRef.current) return;
+    const id = `ema_${Date.now()}`;
+    const colorIndex = emaInstances.length % INDICATOR_COLORS.length;
+    const color = INDICATOR_COLORS[(colorIndex + 1) % INDICATOR_COLORS.length]; // Offset to get different color
+    const series = chartRef.current.addSeries(LineSeries, {
+      color,
+      lineWidth: 2,
+      lineStyle: 0,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    });
+    const newInstance: EMAInstance = { id, name: `EMA (${period})`, color, period, lineWidth: 2, lineStyle: 0, series };
+    setEmaInstances(prev => [...prev, newInstance]);
+  }, [emaInstances.length]);
+
+  const removeEmaInstance = useCallback((instanceId: string) => {
+    setEmaInstances(prev => {
+      const instance = prev.find(i => i.id === instanceId);
+      if (instance?.series && chartRef.current) {
+        try { chartRef.current.removeSeries(instance.series); } catch (e) { console.warn('Error removing EMA series:', e); }
+      }
+      return prev.filter(i => i.id !== instanceId);
+    });
+  }, []);
+
+  const updateEmaInstance = useCallback((instanceId: string, updates: Partial<EMAInstance>) => {
+    setEmaInstances(prev => prev.map(instance => {
+      if (instance.id !== instanceId) return instance;
+      const updated = { ...instance, ...updates };
+      if (updates.period) updated.name = `EMA (${updates.period})`;
+      // Apply color/lineWidth/lineStyle changes to series
+      if (instance.series && (updates.color || updates.lineWidth !== undefined || updates.lineStyle !== undefined)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        instance.series.applyOptions({
+          color: updates.color ?? instance.color,
+          lineWidth: updates.lineWidth ?? instance.lineWidth,
+          lineStyle: updates.lineStyle ?? instance.lineStyle,
+        } as any);
+      }
+      return updated;
+    }));
+  }, []);
+
+  // ============== RSI Instance Helpers ==============
+  const addRsiInstance = useCallback((period: number = 14) => {
+    if (!chartRef.current) return;
+    const id = `rsi_${Date.now()}`;
+    const colorIndex = rsiInstances.length % INDICATOR_COLORS.length;
+    const color = INDICATOR_COLORS[(colorIndex + 2) % INDICATOR_COLORS.length];
+
+    // Create RSI pane
+    const pane = chartRef.current.addPane();
+    const series = pane.addSeries(LineSeries, {
+      color,
+      lineWidth: 2,
+      lineStyle: 0,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    });
+
+    const newInstance: RSIInstance = { id, name: `RSI (${period})`, color, period, overbought: 70, oversold: 30, lineWidth: 2, lineStyle: 0, series, pane };
+    setRsiInstances(prev => [...prev, newInstance]);
+  }, [rsiInstances.length]);
+
+  const removeRsiInstance = useCallback((instanceId: string) => {
+    // Find and remove chart elements BEFORE updating state
+    const instance = rsiInstances.find(i => i.id === instanceId);
+    if (instance && chartRef.current) {
+      try {
+        // Remove series first, then pane
+        if (instance.series) {
+          chartRef.current.removeSeries(instance.series);
+        }
+        // Use setTimeout to ensure series removal completes before pane removal
+        setTimeout(() => {
+          if (instance.pane && chartRef.current) {
+            try {
+              chartRef.current.removePane(instance.pane);
+            } catch (e) { console.warn('Error removing RSI pane:', e); }
+          }
+        }, 0);
+      } catch (e) { console.warn('Error removing RSI series:', e); }
+    }
+    setRsiInstances(prev => prev.filter(i => i.id !== instanceId));
+  }, [rsiInstances]);
+
+  const updateRsiInstance = useCallback((instanceId: string, updates: Partial<RSIInstance>) => {
+    setRsiInstances(prev => prev.map(instance => {
+      if (instance.id !== instanceId) return instance;
+      const updated = { ...instance, ...updates };
+      if (updates.period) updated.name = `RSI (${updates.period})`;
+      // Apply style changes to series
+      if (instance.series && (updates.color || updates.lineWidth !== undefined || updates.lineStyle !== undefined)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        instance.series.applyOptions({
+          color: updates.color ?? instance.color,
+          lineWidth: updates.lineWidth ?? instance.lineWidth,
+          lineStyle: updates.lineStyle ?? instance.lineStyle,
+        } as any);
+      }
+      return updated;
+    }));
+  }, []);
+
+  // ============== Bollinger Bands Instance Helpers ==============
+  const addBbInstance = useCallback((period: number = 20, stdDev: number = 2) => {
+    if (!chartRef.current) return;
+    const id = `bb_${Date.now()}`;
+    const colorIndex = bbInstances.length % INDICATOR_COLORS.length;
+    const color = INDICATOR_COLORS[(colorIndex + 3) % INDICATOR_COLORS.length];
+
+    const upperSeries = chartRef.current.addSeries(LineSeries, { color, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    const middleSeries = chartRef.current.addSeries(LineSeries, { color, lineWidth: 1, lineStyle: 0, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: true });
+    const lowerSeries = chartRef.current.addSeries(LineSeries, { color, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+
+    const newInstance: BBInstance = { id, name: `BB (${period}, ${stdDev})`, color, period, stdDev, lineWidth: 1, lineStyle: 2, upperSeries, middleSeries, lowerSeries };
+    setBbInstances(prev => [...prev, newInstance]);
+  }, [bbInstances.length]);
+
+  const removeBbInstance = useCallback((instanceId: string) => {
+    setBbInstances(prev => {
+      const instance = prev.find(i => i.id === instanceId);
+      if (instance && chartRef.current) {
+        try {
+          if (instance.upperSeries) chartRef.current.removeSeries(instance.upperSeries);
+          if (instance.middleSeries) chartRef.current.removeSeries(instance.middleSeries);
+          if (instance.lowerSeries) chartRef.current.removeSeries(instance.lowerSeries);
+        } catch (e) { console.warn('Error removing BB series:', e); }
+      }
+      return prev.filter(i => i.id !== instanceId);
+    });
+  }, []);
+
+  const updateBbInstance = useCallback((instanceId: string, updates: Partial<BBInstance>) => {
+    setBbInstances(prev => prev.map(instance => {
+      if (instance.id !== instanceId) return instance;
+      const updated = { ...instance, ...updates };
+      if (updates.period || updates.stdDev) {
+        updated.name = `BB (${updated.period}, ${updated.stdDev})`;
+      }
+      // Apply color/lineWidth/lineStyle changes to all series
+      const hasStyleUpdate = updates.color || updates.lineWidth !== undefined || updates.lineStyle !== undefined;
+      if (hasStyleUpdate) {
+        const bandOptions = {
+          color: updates.color ?? instance.color,
+          lineWidth: updates.lineWidth ?? instance.lineWidth,
+          lineStyle: updates.lineStyle ?? instance.lineStyle,
+        };
+        const middleOptions = {
+          color: updates.color ?? instance.color,
+          lineWidth: updates.lineWidth ?? instance.lineWidth,
+          lineStyle: 0, // Middle line is always solid
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (instance.upperSeries) instance.upperSeries.applyOptions(bandOptions as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (instance.middleSeries) instance.middleSeries.applyOptions(middleOptions as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (instance.lowerSeries) instance.lowerSeries.applyOptions(bandOptions as any);
+      }
+      return updated;
+    }));
+  }, []);
+
+  // ============== MACD Instance Helpers ==============
+  const addMacdInstance = useCallback((fast: number = 12, slow: number = 26, signal: number = 9) => {
+    if (!chartRef.current) return;
+    const id = `macd_${Date.now()}`;
+    const colorIndex = macdInstances.length % INDICATOR_COLORS.length;
+    const color = INDICATOR_COLORS[(colorIndex + 4) % INDICATOR_COLORS.length];
+
+    // Create MACD pane
+    const pane = chartRef.current.addPane();
+    const histogramSeries = pane.addSeries(HistogramSeries, { color: '#22c55e', priceFormat: { type: 'price', precision: 2 } });
+    const macdSeries = pane.addSeries(LineSeries, { color: '#3b82f6', lineWidth: 2, lineStyle: 0, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: true });
+    const signalSeries = pane.addSeries(LineSeries, { color: '#f97316', lineWidth: 2, lineStyle: 0, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: true });
+
+    const newInstance: MACDInstance = { id, name: `MACD (${fast},${slow},${signal})`, color, fastPeriod: fast, slowPeriod: slow, signalPeriod: signal, lineWidth: 2, lineStyle: 0, macdSeries, signalSeries, histogramSeries, pane };
+    setMacdInstances(prev => [...prev, newInstance]);
+  }, [macdInstances.length]);
+
+  const removeMacdInstance = useCallback((instanceId: string) => {
+    setMacdInstances(prev => {
+      const instance = prev.find(i => i.id === instanceId);
+      if (instance && chartRef.current) {
+        try {
+          if (instance.macdSeries) chartRef.current.removeSeries(instance.macdSeries);
+          if (instance.signalSeries) chartRef.current.removeSeries(instance.signalSeries);
+          if (instance.histogramSeries) chartRef.current.removeSeries(instance.histogramSeries);
+          if (instance.pane) chartRef.current.removePane(instance.pane);
+        } catch (e) { console.warn('Error removing MACD:', e); }
+      }
+      return prev.filter(i => i.id !== instanceId);
+    });
+  }, []);
+
+  const updateMacdInstance = useCallback((instanceId: string, updates: Partial<MACDInstance>) => {
+    setMacdInstances(prev => prev.map(instance => {
+      if (instance.id !== instanceId) return instance;
+      const updated = { ...instance, ...updates };
+      if (updates.fastPeriod || updates.slowPeriod || updates.signalPeriod) {
+        updated.name = `MACD (${updated.fastPeriod},${updated.slowPeriod},${updated.signalPeriod})`;
+      }
+      // Apply style changes to MACD and signal lines
+      if (instance.macdSeries && (updates.color || updates.lineWidth !== undefined || updates.lineStyle !== undefined)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        instance.macdSeries.applyOptions({
+          color: updates.color ?? instance.color,
+          lineWidth: updates.lineWidth ?? instance.lineWidth,
+          lineStyle: updates.lineStyle ?? instance.lineStyle,
+        } as any);
+      }
+      if (instance.signalSeries && (updates.lineWidth !== undefined || updates.lineStyle !== undefined)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        instance.signalSeries.applyOptions({
+          lineWidth: updates.lineWidth ?? instance.lineWidth,
+          lineStyle: updates.lineStyle ?? instance.lineStyle,
+        } as any);
+      }
+      return updated;
+    }));
+  }, []);
+
+  // ============== Volume Profile Instance Helpers ==============
+  const addVolumeProfileInstance = useCallback(() => {
+    const id = `vp_${Date.now()}`;
+    const colorIndex = volumeProfileInstances.length % INDICATOR_COLORS.length;
+    const color = INDICATOR_COLORS[(colorIndex + 5) % INDICATOR_COLORS.length];
+    const newInstance: VolumeProfileInstance = { id, name: 'Volume Profile', color, rowCount: 24, visible: true };
+    setVolumeProfileInstances(prev => [...prev, newInstance]);
+  }, [volumeProfileInstances.length]);
+
+  const removeVolumeProfileInstance = useCallback((instanceId: string) => {
+    setVolumeProfileInstances(prev => prev.filter(i => i.id !== instanceId));
+  }, []);
+
+  const updateVolumeProfileInstance = useCallback((instanceId: string, updates: Partial<VolumeProfileInstance>) => {
+    setVolumeProfileInstances(prev => prev.map(instance => {
+      if (instance.id !== instanceId) return instance;
+      return { ...instance, ...updates };
+    }));
+  }, []);
+
   // Toggle group expansion
-  const toggleGroup = (group: 'indicators' | 'drawing' | 'settings') => {
+  const toggleGroup = (group: 'indicators' | 'active' | 'drawing' | 'settings') => {
     setExpandedGroup(expandedGroup === group ? null : group);
   };
+
+  // Get list of active indicators (including all instances)
+  const activeIndicators = [
+    showVolume && { id: 'volume', name: 'Volume', color: '#22d3ee' },
+    ...vwapInstances.map(v => ({ id: v.id, name: v.name, color: v.color })),
+    ...volumeProfileInstances.map(v => ({ id: v.id, name: v.name, color: v.color })),
+    ...smaInstances.map(v => ({ id: v.id, name: v.name, color: v.color })),
+    ...emaInstances.map(v => ({ id: v.id, name: v.name, color: v.color })),
+    ...rsiInstances.map(v => ({ id: v.id, name: v.name, color: v.color })),
+    ...bbInstances.map(v => ({ id: v.id, name: v.name, color: v.color })),
+    ...macdInstances.map(v => ({ id: v.id, name: v.name, color: v.color })),
+  ].filter(Boolean) as { id: string; name: string; color: string }[];
 
   return (
     <div
@@ -2637,316 +3537,6 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
       <div className="relative">
         {/* Left Sidebar - Overlays chart (top-11 clears the toolbar) */}
         <div className="absolute left-0 top-11 bottom-0 flex flex-col bg-black/90 border-r border-purple-500/20 backdrop-blur-md z-[100]">
-          {/* Indicators Group */}
-          <div className="border-b border-purple-500/20">
-            <button
-              onClick={() => toggleGroup('indicators')}
-              className={`flex items-center gap-2 w-full p-3 transition-all duration-200 ${
-                expandedGroup === 'indicators'
-                  ? 'bg-cyan-500/20 text-cyan-300'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white/80'
-              }`}
-              title="Indicators"
-            >
-              <BarChart3 className="h-5 w-5" />
-              {expandedGroup === 'indicators' && (
-                <span className="text-sm font-medium">Indicators</span>
-              )}
-              {expandedGroup === 'indicators' && (
-                <ChevronRight className="h-4 w-4 ml-auto rotate-90" />
-              )}
-            </button>
-            {expandedGroup === 'indicators' && (
-              <div className="pb-2 px-2 space-y-1">
-                <button
-                  onClick={() => {
-                    setShowVolume(!showVolume);
-                    if (volumeSeriesRef.current) {
-                      volumeSeriesRef.current.applyOptions({
-                        visible: !showVolume,
-                      });
-                    }
-                  }}
-                  className={`flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 ${
-                    showVolume
-                      ? 'bg-cyan-500/20 text-cyan-300 shadow-sm shadow-cyan-500/20'
-                      : 'text-white/50 hover:bg-white/5 hover:text-white/70'
-                  }`}
-                >
-                  <Activity className="h-4 w-4" />
-                  <span>Volume</span>
-                </button>
-                <button
-                  onClick={() => {
-                    const newShow = !showVWAP;
-                    console.log('[VWAP Toggle]', newShow ? 'Enabled' : 'Disabled', {
-                      hasSeriesRef: !!vwapSeriesRef.current,
-                    });
-                    setShowVWAP(newShow);
-                    if (vwapSeriesRef.current) {
-                      vwapSeriesRef.current.applyOptions({
-                        visible: newShow,
-                      });
-                    }
-                  }}
-                  className={`flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 ${
-                    showVWAP
-                      ? 'bg-amber-500/20 text-amber-300 shadow-sm shadow-amber-500/20'
-                      : 'text-white/50 hover:bg-white/5 hover:text-white/70'
-                  }`}
-                >
-                  <TrendingUp className="h-4 w-4" />
-                  <span>VWAP</span>
-                </button>
-                <button
-                  onClick={() => {
-                    const newShow = !showVolumeProfile;
-                    console.log('[Volume Profile Toggle]', newShow ? 'Enabled' : 'Disabled', {
-                      profileLevels: volumeProfile.length,
-                      hasCandlestickSeries: !!candlestickSeriesRef.current,
-                    });
-                    setShowVolumeProfile(newShow);
-                  }}
-                  className={`flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 ${
-                    showVolumeProfile
-                      ? 'bg-purple-500/20 text-purple-300 shadow-sm shadow-purple-500/20'
-                      : 'text-white/50 hover:bg-white/5 hover:text-white/70'
-                  }`}
-                >
-                  <BarChart3 className="h-4 w-4 rotate-90" />
-                  <span>Vol Profile</span>
-                </button>
-
-                {/* SMA Toggle with Period */}
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => {
-                      const newShow = !showSMA;
-                      setShowSMA(newShow);
-                      if (smaSeriesRef.current) {
-                        smaSeriesRef.current.applyOptions({ visible: newShow });
-                      }
-                    }}
-                    className={`flex items-center gap-2 flex-1 px-3 py-2 rounded-l text-sm transition-all duration-200 ${
-                      showSMA
-                        ? 'bg-cyan-500/20 text-cyan-300 shadow-sm shadow-cyan-500/20'
-                        : 'text-white/50 hover:bg-white/5 hover:text-white/70'
-                    }`}
-                  >
-                    <Minus className="h-4 w-4" />
-                    <span>SMA</span>
-                  </button>
-                  <select
-                    value={smaPeriod}
-                    onChange={(e) => {
-                      const newPeriod = parseInt(e.target.value);
-                      setSmaPeriod(newPeriod);
-                      // Recalculate SMA with new period
-                      if (smaSeriesRef.current && candleDataRef.current.length > 0) {
-                        const closes = candleDataRef.current.map((c: any) => c.close);
-                        const smaData = candleDataRef.current.map((candle: any, i: number) => {
-                          if (i < newPeriod - 1) return null;
-                          const sum = closes.slice(i - newPeriod + 1, i + 1).reduce((a: number, b: number) => a + b, 0);
-                          return { time: candle.time, value: sum / newPeriod };
-                        }).filter(Boolean);
-                        smaSeriesRef.current.setData(smaData);
-                      }
-                    }}
-                    className="w-14 px-1 py-2 rounded-r bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-cyan-500/50"
-                  >
-                    <option value="9">9</option>
-                    <option value="20">20</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                    <option value="200">200</option>
-                  </select>
-                </div>
-
-                {/* EMA Toggle with Period */}
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => {
-                      const newShow = !showEMA;
-                      setShowEMA(newShow);
-                      if (emaSeriesRef.current) {
-                        emaSeriesRef.current.applyOptions({ visible: newShow });
-                      }
-                    }}
-                    className={`flex items-center gap-2 flex-1 px-3 py-2 rounded-l text-sm transition-all duration-200 ${
-                      showEMA
-                        ? 'bg-purple-500/20 text-purple-300 shadow-sm shadow-purple-500/20'
-                        : 'text-white/50 hover:bg-white/5 hover:text-white/70'
-                    }`}
-                  >
-                    <Minus className="h-4 w-4" />
-                    <span>EMA</span>
-                  </button>
-                  <select
-                    value={emaPeriod}
-                    onChange={(e) => {
-                      const newPeriod = parseInt(e.target.value);
-                      setEmaPeriod(newPeriod);
-                      // Recalculate EMA with new period
-                      if (emaSeriesRef.current && candleDataRef.current.length > 0) {
-                        const multiplier = 2 / (newPeriod + 1);
-                        let ema: number | null = null;
-                        const emaData = candleDataRef.current.map((candle: any, i: number) => {
-                          if (i < newPeriod - 1) return null;
-                          if (ema === null) {
-                            const sum = candleDataRef.current.slice(0, newPeriod).reduce((a: number, c: any) => a + c.close, 0);
-                            ema = sum / newPeriod;
-                          } else {
-                            ema = (candle.close - ema) * multiplier + ema;
-                          }
-                          return { time: candle.time, value: ema };
-                        }).filter(Boolean);
-                        emaSeriesRef.current.setData(emaData);
-                      }
-                    }}
-                    className="w-14 px-1 py-2 rounded-r bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-purple-500/50"
-                  >
-                    <option value="9">9</option>
-                    <option value="12">12</option>
-                    <option value="20">20</option>
-                    <option value="26">26</option>
-                    <option value="50">50</option>
-                  </select>
-                </div>
-
-                {/* RSI Toggle with Period */}
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => {
-                      const newShow = !showRSI;
-                      setShowRSI(newShow);
-                      if (rsiSeriesRef.current && chartRef.current) {
-                        rsiSeriesRef.current.applyOptions({ visible: newShow });
-                        chartRef.current.priceScale('rsi').applyOptions({ visible: newShow });
-                      }
-                    }}
-                    className={`flex items-center gap-2 flex-1 px-3 py-2 rounded-l text-sm transition-all duration-200 ${
-                      showRSI
-                        ? 'bg-pink-500/20 text-pink-300 shadow-sm shadow-pink-500/20'
-                        : 'text-white/50 hover:bg-white/5 hover:text-white/70'
-                    }`}
-                  >
-                    <Activity className="h-4 w-4" />
-                    <span>RSI</span>
-                  </button>
-                  <select
-                    value={rsiPeriod}
-                    onChange={(e) => {
-                      const newPeriod = parseInt(e.target.value);
-                      setRsiPeriod(newPeriod);
-                      // Recalculate RSI with new period
-                      if (rsiSeriesRef.current && candleDataRef.current.length > 0) {
-                        const gains: number[] = [];
-                        const losses: number[] = [];
-                        const rsiData: { time: any; value: number }[] = [];
-                        for (let i = 1; i < candleDataRef.current.length; i++) {
-                          const change = candleDataRef.current[i].close - candleDataRef.current[i - 1].close;
-                          gains.push(change > 0 ? change : 0);
-                          losses.push(change < 0 ? -change : 0);
-                          if (i >= newPeriod) {
-                            const avgGain = gains.slice(i - newPeriod, i).reduce((a, b) => a + b, 0) / newPeriod;
-                            const avgLoss = losses.slice(i - newPeriod, i).reduce((a, b) => a + b, 0) / newPeriod;
-                            const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-                            const rsi = 100 - (100 / (1 + rs));
-                            rsiData.push({ time: candleDataRef.current[i].time, value: rsi });
-                          }
-                        }
-                        rsiSeriesRef.current.setData(rsiData);
-                      }
-                    }}
-                    className="w-14 px-1 py-2 rounded-r bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-pink-500/50"
-                  >
-                    <option value="7">7</option>
-                    <option value="14">14</option>
-                    <option value="21">21</option>
-                  </select>
-                </div>
-
-                {/* Bollinger Bands Toggle with Period */}
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => {
-                      const newShow = !showBB;
-                      setShowBB(newShow);
-                      if (bbUpperSeriesRef.current && bbMiddleSeriesRef.current && bbLowerSeriesRef.current) {
-                        bbUpperSeriesRef.current.applyOptions({ visible: newShow });
-                        bbMiddleSeriesRef.current.applyOptions({ visible: newShow });
-                        bbLowerSeriesRef.current.applyOptions({ visible: newShow });
-                      }
-                    }}
-                    className={`flex items-center gap-2 flex-1 px-3 py-2 rounded-l text-sm transition-all duration-200 ${
-                      showBB
-                        ? 'bg-amber-500/20 text-amber-300 shadow-sm shadow-amber-500/20'
-                        : 'text-white/50 hover:bg-white/5 hover:text-white/70'
-                    }`}
-                  >
-                    <TrendingUp className="h-4 w-4" />
-                    <span>BB</span>
-                  </button>
-                  <select
-                    value={bbPeriod}
-                    onChange={(e) => {
-                      const newPeriod = parseInt(e.target.value);
-                      setBbPeriod(newPeriod);
-                      // Recalculate BB with new period
-                      if (bbUpperSeriesRef.current && bbMiddleSeriesRef.current && bbLowerSeriesRef.current && candleDataRef.current.length > 0) {
-                        const closes = candleDataRef.current.map((c: any) => c.close);
-                        const bbUpperData: { time: any; value: number }[] = [];
-                        const bbMiddleData: { time: any; value: number }[] = [];
-                        const bbLowerData: { time: any; value: number }[] = [];
-                        for (let i = newPeriod - 1; i < candleDataRef.current.length; i++) {
-                          const slice = closes.slice(i - newPeriod + 1, i + 1);
-                          const sma = slice.reduce((a: number, b: number) => a + b, 0) / newPeriod;
-                          const squaredDiffs = slice.map((v: number) => Math.pow(v - sma, 2));
-                          const variance = squaredDiffs.reduce((a: number, b: number) => a + b, 0) / newPeriod;
-                          const stdDev = Math.sqrt(variance);
-                          bbMiddleData.push({ time: candleDataRef.current[i].time, value: sma });
-                          bbUpperData.push({ time: candleDataRef.current[i].time, value: sma + bbStdDev * stdDev });
-                          bbLowerData.push({ time: candleDataRef.current[i].time, value: sma - bbStdDev * stdDev });
-                        }
-                        bbUpperSeriesRef.current.setData(bbUpperData);
-                        bbMiddleSeriesRef.current.setData(bbMiddleData);
-                        bbLowerSeriesRef.current.setData(bbLowerData);
-                      }
-                    }}
-                    className="w-14 px-1 py-2 rounded-r bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-amber-500/50"
-                  >
-                    <option value="10">10</option>
-                    <option value="20">20</option>
-                    <option value="50">50</option>
-                  </select>
-                </div>
-
-                {/* MACD Toggle */}
-                <button
-                  onClick={() => {
-                    const newShow = !showMACD;
-                    setShowMACD(newShow);
-                    if (macdLineSeriesRef.current && macdSignalSeriesRef.current && macdHistogramSeriesRef.current && chartRef.current) {
-                      macdLineSeriesRef.current.applyOptions({ visible: newShow });
-                      macdSignalSeriesRef.current.applyOptions({ visible: newShow });
-                      macdHistogramSeriesRef.current.applyOptions({ visible: newShow });
-                      chartRef.current.priceScale('macd').applyOptions({ visible: newShow });
-                    }
-                  }}
-                  className={`flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 ${
-                    showMACD
-                      ? 'bg-blue-500/20 text-blue-300 shadow-sm shadow-blue-500/20'
-                      : 'text-white/50 hover:bg-white/5 hover:text-white/70'
-                  }`}
-                >
-                  <Activity className="h-4 w-4" />
-                  <span>MACD</span>
-                  <span className="ml-auto text-[10px] opacity-50">12/26/9</span>
-                </button>
-              </div>
-            )}
-          </div>
-
           {/* Drawing Tools Group */}
           <div className="border-b border-purple-500/20">
             <button
@@ -3077,6 +3667,1585 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
               </div>
             )}
           </div>
+
+          {/* Indicators Group */}
+          <div className="border-b border-purple-500/20">
+            <button
+              onClick={() => toggleGroup('indicators')}
+              className={`flex items-center gap-2 w-full p-3 transition-all duration-200 ${
+                expandedGroup === 'indicators'
+                  ? 'bg-cyan-500/20 text-cyan-300'
+                  : 'text-white/60 hover:bg-white/5 hover:text-white/80'
+              }`}
+              title="Indicators"
+            >
+              <BarChart3 className="h-5 w-5" />
+              {expandedGroup === 'indicators' && (
+                <span className="text-sm font-medium">Indicators</span>
+              )}
+              {expandedGroup === 'indicators' && (
+                <ChevronRight className="h-4 w-4 ml-auto rotate-90" />
+              )}
+            </button>
+            {expandedGroup === 'indicators' && (
+              <div className="pb-2 px-2 space-y-1">
+                {/* Simple toggle buttons for adding indicators */}
+                <button
+                  onClick={() => setShowVolume(!showVolume)}
+                  className={`flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 ${
+                    showVolume
+                      ? 'bg-cyan-500/20 text-cyan-300 shadow-sm shadow-cyan-500/20'
+                      : 'text-white/50 hover:bg-white/5 hover:text-white/70'
+                  }`}
+                >
+                  <Activity className="h-4 w-4" />
+                  <span>Volume</span>
+                  {showVolume && <span className="ml-auto text-[10px] text-green-400">Active</span>}
+                </button>
+                <button
+                  onClick={() => addVwapInstance('Session')}
+                  className="flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 text-white/50 hover:bg-white/5 hover:text-white/70"
+                >
+                  <TrendingUp className="h-4 w-4" />
+                  <span>VWAP</span>
+                  {vwapInstances.length > 0 && <span className="ml-auto text-[10px] text-green-400">{vwapInstances.length}</span>}
+                </button>
+                <button
+                  onClick={() => {
+                    setDrawingMode(drawingMode === 'anchored_vwap' ? 'none' : 'anchored_vwap');
+                    if (drawingMode !== 'anchored_vwap') {
+                      toast.info('Click on chart to set anchor point');
+                    }
+                  }}
+                  className={`flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 ${
+                    drawingMode === 'anchored_vwap'
+                      ? 'bg-purple-500/20 text-purple-300 shadow-sm shadow-purple-500/20'
+                      : 'text-white/50 hover:bg-white/5 hover:text-white/70'
+                  }`}
+                >
+                  <Target className="h-4 w-4" />
+                  <span>Anchored VWAP</span>
+                  {anchoredVwapInstances.length > 0 && <span className="ml-auto text-[10px] text-green-400">{anchoredVwapInstances.length}</span>}
+                </button>
+                <button
+                  onClick={() => addVolumeProfileInstance()}
+                  className="flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 text-white/50 hover:bg-white/5 hover:text-white/70"
+                >
+                  <BarChart3 className="h-4 w-4 rotate-90" />
+                  <span>Vol Profile</span>
+                  {volumeProfileInstances.length > 0 && <span className="ml-auto text-[10px] text-green-400">{volumeProfileInstances.length}</span>}
+                </button>
+                <button
+                  onClick={() => addSmaInstance()}
+                  className="flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 text-white/50 hover:bg-white/5 hover:text-white/70"
+                >
+                  <Minus className="h-4 w-4" />
+                  <span>SMA</span>
+                  {smaInstances.length > 0 && <span className="ml-auto text-[10px] text-green-400">{smaInstances.length}</span>}
+                </button>
+                <button
+                  onClick={() => addEmaInstance()}
+                  className="flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 text-white/50 hover:bg-white/5 hover:text-white/70"
+                >
+                  <Minus className="h-4 w-4" />
+                  <span>EMA</span>
+                  {emaInstances.length > 0 && <span className="ml-auto text-[10px] text-green-400">{emaInstances.length}</span>}
+                </button>
+                <button
+                  onClick={() => addRsiInstance()}
+                  className="flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 text-white/50 hover:bg-white/5 hover:text-white/70"
+                >
+                  <Activity className="h-4 w-4" />
+                  <span>RSI</span>
+                  {rsiInstances.length > 0 && <span className="ml-auto text-[10px] text-green-400">{rsiInstances.length}</span>}
+                </button>
+                <button
+                  onClick={() => addBbInstance()}
+                  className="flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 text-white/50 hover:bg-white/5 hover:text-white/70"
+                >
+                  <TrendingUp className="h-4 w-4" />
+                  <span>Bollinger Bands</span>
+                  {bbInstances.length > 0 && <span className="ml-auto text-[10px] text-green-400">{bbInstances.length}</span>}
+                </button>
+                <button
+                  onClick={() => addMacdInstance()}
+                  className="flex items-center gap-2 w-full px-3 py-2 rounded text-sm transition-all duration-200 text-white/50 hover:bg-white/5 hover:text-white/70"
+                >
+                  <Activity className="h-4 w-4" />
+                  <span>MACD</span>
+                  {macdInstances.length > 0 && <span className="ml-auto text-[10px] text-green-400">{macdInstances.length}</span>}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Active Indicators Group */}
+          {activeIndicators.length > 0 && (
+            <div className="border-b border-purple-500/20">
+              <button
+                onClick={() => toggleGroup('active')}
+                className={`flex items-center gap-2 w-full p-3 transition-all duration-200 ${
+                  expandedGroup === 'active'
+                    ? 'bg-green-500/20 text-green-300'
+                    : 'text-white/60 hover:bg-white/5 hover:text-white/80'
+                }`}
+                title="Active Indicators"
+              >
+                <Activity className="h-5 w-5" />
+                {expandedGroup === 'active' && (
+                  <span className="text-sm font-medium">Active ({activeIndicators.length})</span>
+                )}
+                {expandedGroup !== 'active' && (
+                  <span className="text-xs bg-green-500/30 text-green-300 px-1.5 py-0.5 rounded-full">{activeIndicators.length}</span>
+                )}
+                {expandedGroup === 'active' && (
+                  <ChevronRight className="h-4 w-4 ml-auto rotate-90" />
+                )}
+              </button>
+              {expandedGroup === 'active' && (
+                <div className="pb-2 px-2 space-y-1">
+                  {/* Volume */}
+                  {showVolume && (
+                    <div className="bg-black/40 rounded border border-white/10">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <div className="w-2 h-2 rounded-full bg-cyan-400" />
+                        <span className="text-sm text-cyan-300 flex-1">Volume</span>
+                        <button
+                          onClick={() => setShowVolume(false)}
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3 text-white/50 hover:text-red-400" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* VWAP Instances with Settings */}
+                  {vwapInstances.map((instance) => (
+                    <div key={instance.id} className="bg-black/40 rounded border border-white/10">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: instance.color }} />
+                        <span className="text-sm flex-1" style={{ color: instance.color }}>{instance.name}</span>
+                        <button
+                          onClick={() => setActiveIndicatorSettings(activeIndicatorSettings === instance.id ? null : instance.id)}
+                          className={`p-1 rounded transition-colors ${activeIndicatorSettings === instance.id ? 'bg-amber-500/20' : 'hover:bg-white/10'}`}
+                          title="Settings"
+                        >
+                          <Settings className="h-3 w-3 text-white/50 hover:text-amber-400" />
+                        </button>
+                        <button
+                          onClick={() => removeVwapInstance(instance.id)}
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3 text-white/50 hover:text-red-400" />
+                        </button>
+                      </div>
+                      {activeIndicatorSettings === instance.id && (
+                        <div className="px-3 pb-3 pt-1 border-t border-white/10 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Anchor</span>
+                            <select
+                              value={instance.anchorPeriod}
+                              onChange={(e) => updateVwapInstance(instance.id, { anchorPeriod: e.target.value as VWAPAnchorPeriod })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-amber-500/50"
+                            >
+                              <option value="Session">Session</option>
+                              <option value="Week">Week</option>
+                              <option value="Month">Month</option>
+                              <option value="Quarter">Quarter</option>
+                              <option value="Year">Year</option>
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Source</span>
+                            <select
+                              value={instance.source}
+                              onChange={(e) => updateVwapInstance(instance.id, { source: e.target.value as VWAPSource })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-amber-500/50"
+                            >
+                              <option value="hlc3">HLC3</option>
+                              <option value="hl2">HL2</option>
+                              <option value="ohlc4">OHLC4</option>
+                              <option value="close">Close</option>
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Bands</span>
+                            <button
+                              onClick={() => updateVwapInstance(instance.id, { showBands: !instance.showBands })}
+                              className={`px-2 py-1 rounded text-xs transition-all ${instance.showBands ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : 'bg-black/60 text-white/50 border border-white/10'}`}
+                            >
+                              {instance.showBands ? 'ON' : 'OFF'}
+                            </button>
+                          </div>
+                          {instance.showBands && (
+                            <div className="space-y-2 pt-1">
+                              {/* Band 1 */}
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <button onClick={() => updateVwapInstance(instance.id, { showBand1: !instance.showBand1 })} className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${instance.showBand1 ? 'bg-green-500/30 border-green-500 text-green-400' : 'bg-black/60 border-white/20'}`}>{instance.showBand1 && '✓'}</button>
+                                  <span className="text-xs text-green-400 w-8">±1σ</span>
+                                  <input type="number" step="0.1" min="0.1" max="5" value={instance.bandMult1} onChange={(e) => updateVwapInstance(instance.id, { bandMult1: parseFloat(e.target.value) || 1 })} className="w-14 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none" />
+                                </div>
+                                {instance.showBand1 && (
+                                  <div className="space-y-1 pl-6">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {['#22c55e', '#3b82f6', '#a855f7', '#f59e0b', '#ec4899', '#14b8a6', '#ef4444', '#ffffff'].map(color => (
+                                        <button key={color} onClick={() => updateVwapInstance(instance.id, { bandColor1: color })} className={`w-4 h-4 rounded border-2 transition-all ${instance.bandColor1 === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`} style={{ backgroundColor: color }} />
+                                      ))}
+                                      <input type="color" value={instance.bandColor1} onChange={(e) => updateVwapInstance(instance.id, { bandColor1: e.target.value })} className="w-4 h-4 rounded cursor-pointer border-0 p-0 bg-transparent" title="Custom color" />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                        <button key={style.value} onClick={() => updateVwapInstance(instance.id, { bandLineStyle1: style.value })} className={`w-6 h-5 rounded text-xs font-mono transition-all text-white ${instance.bandLineStyle1 === style.value ? 'bg-green-500/30 border-green-500' : 'bg-black/60 border-white/20'} border`}>{style.label}</button>
+                                      ))}
+                                      <span className="w-1" />
+                                      {[1, 2, 3, 4].map(width => (
+                                        <button key={width} onClick={() => updateVwapInstance(instance.id, { bandLineWidth1: width })} className={`w-5 h-5 rounded text-xs transition-all text-white ${instance.bandLineWidth1 === width ? 'bg-green-500/30 border-green-500' : 'bg-black/60 border-white/20'} border`}>{width}</button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              {/* Band 2 */}
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <button onClick={() => updateVwapInstance(instance.id, { showBand2: !instance.showBand2 })} className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${instance.showBand2 ? 'bg-yellow-500/30 border-yellow-500 text-yellow-400' : 'bg-black/60 border-white/20'}`}>{instance.showBand2 && '✓'}</button>
+                                  <span className="text-xs text-yellow-400 w-8">±2σ</span>
+                                  <input type="number" step="0.1" min="0.1" max="5" value={instance.bandMult2} onChange={(e) => updateVwapInstance(instance.id, { bandMult2: parseFloat(e.target.value) || 2 })} className="w-14 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none" />
+                                </div>
+                                {instance.showBand2 && (
+                                  <div className="space-y-1 pl-6">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {['#eab308', '#3b82f6', '#a855f7', '#22c55e', '#ec4899', '#14b8a6', '#ef4444', '#ffffff'].map(color => (
+                                        <button key={color} onClick={() => updateVwapInstance(instance.id, { bandColor2: color })} className={`w-4 h-4 rounded border-2 transition-all ${instance.bandColor2 === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`} style={{ backgroundColor: color }} />
+                                      ))}
+                                      <input type="color" value={instance.bandColor2} onChange={(e) => updateVwapInstance(instance.id, { bandColor2: e.target.value })} className="w-4 h-4 rounded cursor-pointer border-0 p-0 bg-transparent" title="Custom color" />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                        <button key={style.value} onClick={() => updateVwapInstance(instance.id, { bandLineStyle2: style.value })} className={`w-6 h-5 rounded text-xs font-mono transition-all text-white ${instance.bandLineStyle2 === style.value ? 'bg-yellow-500/30 border-yellow-500' : 'bg-black/60 border-white/20'} border`}>{style.label}</button>
+                                      ))}
+                                      <span className="w-1" />
+                                      {[1, 2, 3, 4].map(width => (
+                                        <button key={width} onClick={() => updateVwapInstance(instance.id, { bandLineWidth2: width })} className={`w-5 h-5 rounded text-xs transition-all text-white ${instance.bandLineWidth2 === width ? 'bg-yellow-500/30 border-yellow-500' : 'bg-black/60 border-white/20'} border`}>{width}</button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              {/* Band 3 */}
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <button onClick={() => updateVwapInstance(instance.id, { showBand3: !instance.showBand3 })} className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${instance.showBand3 ? 'bg-teal-500/30 border-teal-500 text-teal-400' : 'bg-black/60 border-white/20'}`}>{instance.showBand3 && '✓'}</button>
+                                  <span className="text-xs text-teal-400 w-8">±3σ</span>
+                                  <input type="number" step="0.1" min="0.1" max="5" value={instance.bandMult3} onChange={(e) => updateVwapInstance(instance.id, { bandMult3: parseFloat(e.target.value) || 3 })} className="w-14 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none" />
+                                </div>
+                                {instance.showBand3 && (
+                                  <div className="space-y-1 pl-6">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {['#14b8a6', '#3b82f6', '#a855f7', '#22c55e', '#ec4899', '#eab308', '#ef4444', '#ffffff'].map(color => (
+                                        <button key={color} onClick={() => updateVwapInstance(instance.id, { bandColor3: color })} className={`w-4 h-4 rounded border-2 transition-all ${instance.bandColor3 === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`} style={{ backgroundColor: color }} />
+                                      ))}
+                                      <input type="color" value={instance.bandColor3} onChange={(e) => updateVwapInstance(instance.id, { bandColor3: e.target.value })} className="w-4 h-4 rounded cursor-pointer border-0 p-0 bg-transparent" title="Custom color" />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                        <button key={style.value} onClick={() => updateVwapInstance(instance.id, { bandLineStyle3: style.value })} className={`w-6 h-5 rounded text-xs font-mono transition-all text-white ${instance.bandLineStyle3 === style.value ? 'bg-teal-500/30 border-teal-500' : 'bg-black/60 border-white/20'} border`}>{style.label}</button>
+                                      ))}
+                                      <span className="w-1" />
+                                      {[1, 2, 3, 4].map(width => (
+                                        <button key={width} onClick={() => updateVwapInstance(instance.id, { bandLineWidth3: width })} className={`w-5 h-5 rounded text-xs transition-all text-white ${instance.bandLineWidth3 === width ? 'bg-teal-500/30 border-teal-500' : 'bg-black/60 border-white/20'} border`}>{width}</button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2 pt-1">
+                            <span className="text-xs text-white/50 w-14">Color</span>
+                            <div className="flex gap-1 flex-wrap">
+                              {['#f59e0b', '#22d3ee', '#a855f7', '#ec4899', '#10b981', '#3b82f6', '#ef4444', '#ffffff'].map(color => (
+                                <button
+                                  key={color}
+                                  onClick={() => updateVwapInstance(instance.id, { color })}
+                                  className={`w-5 h-5 rounded border-2 transition-all ${instance.color === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`}
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                              <input
+                                type="color"
+                                value={instance.color}
+                                onChange={(e) => updateVwapInstance(instance.id, { color: e.target.value })}
+                                className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+                                title="Custom color"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Style</span>
+                            <div className="flex gap-1">
+                              {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                <button
+                                  key={style.value}
+                                  onClick={() => updateVwapInstance(instance.id, { lineStyle: style.value })}
+                                  className={`w-7 h-6 rounded text-xs font-mono transition-all text-white ${instance.lineStyle === style.value ? 'bg-amber-500/30 border-amber-500' : 'bg-black/60 border-white/20 hover:border-amber-500/50'} border`}
+                                >
+                                  {style.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Width</span>
+                            <div className="flex gap-1">
+                              {[1, 2, 3, 4].map(width => (
+                                <button
+                                  key={width}
+                                  onClick={() => updateVwapInstance(instance.id, { lineWidth: width })}
+                                  className={`w-6 h-6 rounded text-xs transition-all text-white ${instance.lineWidth === width ? 'bg-amber-500/30 border-amber-500' : 'bg-black/60 border-white/20 hover:border-amber-500/50'} border`}
+                                >
+                                  {width}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {/* Presets */}
+                          <div className="border-t border-white/10 pt-2 mt-2">
+                            <div className="text-xs text-white/50 mb-1">Presets</div>
+                            <div className="space-y-1 max-h-20 overflow-y-auto">
+                              {indicatorPresets.vwap.map((preset, idx) => (
+                                <div key={idx} className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => {
+                                      // Build update object with all preset values
+                                      const presetUpdate: Partial<VWAPInstance> = {
+                                        color: preset.color,
+                                        lineWidth: preset.lineWidth,
+                                        lineStyle: preset.lineStyle,
+                                        anchorPeriod: (preset.anchorPeriod as VWAPAnchorPeriod) || instance.anchorPeriod,
+                                        source: (preset.source as VWAPSource) || instance.source,
+                                      };
+                                      // Apply band visibility settings if preset has them
+                                      if (preset.showBands !== undefined) presetUpdate.showBands = preset.showBands;
+                                      if (preset.showBand1 !== undefined) presetUpdate.showBand1 = preset.showBand1;
+                                      if (preset.showBand2 !== undefined) presetUpdate.showBand2 = preset.showBand2;
+                                      if (preset.showBand3 !== undefined) presetUpdate.showBand3 = preset.showBand3;
+                                      // Apply band multipliers if preset has them
+                                      if (preset.bandMultiplier1 !== undefined) presetUpdate.bandMult1 = preset.bandMultiplier1;
+                                      if (preset.bandMultiplier2 !== undefined) presetUpdate.bandMult2 = preset.bandMultiplier2;
+                                      if (preset.bandMultiplier3 !== undefined) presetUpdate.bandMult3 = preset.bandMultiplier3;
+                                      // Apply band colors if preset has them
+                                      if (preset.bandColor1) presetUpdate.bandColor1 = preset.bandColor1;
+                                      if (preset.bandColor2) presetUpdate.bandColor2 = preset.bandColor2;
+                                      if (preset.bandColor3) presetUpdate.bandColor3 = preset.bandColor3;
+                                      // Apply band styles if preset has them
+                                      if (preset.bandLineWidth1 !== undefined) presetUpdate.bandLineWidth1 = preset.bandLineWidth1;
+                                      if (preset.bandLineStyle1 !== undefined) presetUpdate.bandLineStyle1 = preset.bandLineStyle1;
+                                      if (preset.bandLineWidth2 !== undefined) presetUpdate.bandLineWidth2 = preset.bandLineWidth2;
+                                      if (preset.bandLineStyle2 !== undefined) presetUpdate.bandLineStyle2 = preset.bandLineStyle2;
+                                      if (preset.bandLineWidth3 !== undefined) presetUpdate.bandLineWidth3 = preset.bandLineWidth3;
+                                      if (preset.bandLineStyle3 !== undefined) presetUpdate.bandLineStyle3 = preset.bandLineStyle3;
+                                      updateVwapInstance(instance.id, presetUpdate);
+                                    }}
+                                    className="flex-1 px-2 py-1 text-left text-xs rounded bg-black/40 hover:bg-amber-500/20 text-white/70 hover:text-white truncate"
+                                  >
+                                    <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: preset.color }} />
+                                    {preset.name}
+                                  </button>
+                                  <button
+                                    onClick={() => setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      vwap: prev.vwap.filter((_, i) => i !== idx)
+                                    }))}
+                                    className="p-1 hover:bg-red-500/20 rounded"
+                                    title="Delete preset"
+                                  >
+                                    <X className="h-3 w-3 text-white/30 hover:text-red-400" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              <input
+                                type="text"
+                                placeholder="Preset name..."
+                                value={activeIndicatorSettings === instance.id ? newIndicatorPresetName : ''}
+                                onChange={(e) => setNewIndicatorPresetName(e.target.value)}
+                                className="flex-1 px-2 py-1 text-xs rounded bg-black/60 border border-white/10 text-white/70 focus:outline-none focus:border-amber-500/50"
+                              />
+                              <button
+                                onClick={() => {
+                                  if (newIndicatorPresetName.trim()) {
+                                    setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      vwap: [...prev.vwap, {
+                                        name: newIndicatorPresetName.trim(),
+                                        color: instance.color,
+                                        lineWidth: instance.lineWidth,
+                                        lineStyle: instance.lineStyle,
+                                        anchorPeriod: instance.anchorPeriod,
+                                        source: instance.source,
+                                        showBands: instance.showBands,
+                                        showBand1: instance.showBand1,
+                                        showBand2: instance.showBand2,
+                                        showBand3: instance.showBand3,
+                                        bandMultiplier1: instance.bandMult1,
+                                        bandMultiplier2: instance.bandMult2,
+                                        bandMultiplier3: instance.bandMult3,
+                                        bandColor1: instance.bandColor1,
+                                        bandColor2: instance.bandColor2,
+                                        bandColor3: instance.bandColor3,
+                                        bandLineWidth1: instance.bandLineWidth1,
+                                        bandLineStyle1: instance.bandLineStyle1,
+                                        bandLineWidth2: instance.bandLineWidth2,
+                                        bandLineStyle2: instance.bandLineStyle2,
+                                        bandLineWidth3: instance.bandLineWidth3,
+                                        bandLineStyle3: instance.bandLineStyle3
+                                      }]
+                                    }));
+                                    setNewIndicatorPresetName('');
+                                  }
+                                }}
+                                className="px-2 py-1 text-xs rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30"
+                              >
+                                <Save className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Volume Profile Instances */}
+                  {volumeProfileInstances.map((instance) => (
+                    <div key={instance.id} className="bg-black/40 rounded border border-white/10">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: instance.color }} />
+                        <span className="text-sm flex-1" style={{ color: instance.color }}>{instance.name}</span>
+                        <button
+                          onClick={() => setActiveIndicatorSettings(activeIndicatorSettings === instance.id ? null : instance.id)}
+                          className={`p-1 rounded transition-colors ${activeIndicatorSettings === instance.id ? 'bg-purple-500/20' : 'hover:bg-white/10'}`}
+                          title="Settings"
+                        >
+                          <Settings className="h-3 w-3 text-white/50 hover:text-purple-400" />
+                        </button>
+                        <button
+                          onClick={() => removeVolumeProfileInstance(instance.id)}
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3 text-white/50 hover:text-red-400" />
+                        </button>
+                      </div>
+                      {activeIndicatorSettings === instance.id && (
+                        <div className="px-3 pb-3 pt-1 border-t border-white/10">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Rows</span>
+                            <select
+                              value={instance.rowCount}
+                              onChange={(e) => updateVolumeProfileInstance(instance.id, { rowCount: parseInt(e.target.value) })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-purple-500/50"
+                            >
+                              <option value="12">12</option>
+                              <option value="24">24</option>
+                              <option value="48">48</option>
+                              <option value="96">96</option>
+                            </select>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Anchored VWAP Instances */}
+                  {anchoredVwapInstances.map((instance) => (
+                    <div key={instance.id} className="bg-black/40 rounded border border-white/10">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: instance.color }} />
+                        <span className="text-sm flex-1" style={{ color: instance.color }}>{instance.name}</span>
+                        <button
+                          onClick={() => setActiveIndicatorSettings(activeIndicatorSettings === instance.id ? null : instance.id)}
+                          className={`p-1 rounded transition-colors ${activeIndicatorSettings === instance.id ? 'bg-purple-500/20' : 'hover:bg-white/10'}`}
+                          title="Settings"
+                        >
+                          <Settings className="h-3 w-3 text-white/50 hover:text-purple-400" />
+                        </button>
+                        <button
+                          onClick={() => removeAnchoredVwapInstance(instance.id)}
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3 text-white/50 hover:text-red-400" />
+                        </button>
+                      </div>
+                      {activeIndicatorSettings === instance.id && (
+                        <div className="px-3 pb-3 pt-1 border-t border-white/10 space-y-2">
+                          {/* Anchor - with show/move button */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Anchor</span>
+                            <span className="flex-1 text-xs text-white/70 truncate">{new Date(instance.anchorTime * 1000).toLocaleString()}</span>
+                            <button
+                              onClick={() => {
+                                setSelectedAnchoredVwap(selectedAnchoredVwap === instance.id ? null : instance.id);
+                                if (selectedAnchoredVwap !== instance.id) {
+                                  toast.info('Drag anchor marker to reposition');
+                                }
+                              }}
+                              className={`px-2 py-1 rounded text-xs transition-all ${selectedAnchoredVwap === instance.id ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50' : 'bg-black/60 text-white/50 border border-white/10 hover:border-purple-500/50'}`}
+                              title={selectedAnchoredVwap === instance.id ? 'Hide anchor marker' : 'Show anchor marker'}
+                            >
+                              <Target className="h-3 w-3 inline" />
+                            </button>
+                          </div>
+                          {/* Source */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Source</span>
+                            <select
+                              value={instance.source}
+                              onChange={(e) => updateAnchoredVwapInstance(instance.id, { source: e.target.value as VWAPSource })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-purple-500/50"
+                            >
+                              <option value="hlc3">HLC3</option>
+                              <option value="hl2">HL2</option>
+                              <option value="ohlc4">OHLC4</option>
+                              <option value="close">Close</option>
+                            </select>
+                          </div>
+                          {/* Bands ON/OFF */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Bands</span>
+                            <button
+                              onClick={() => updateAnchoredVwapInstance(instance.id, { showBands: !instance.showBands })}
+                              className={`px-2 py-1 rounded text-xs transition-all ${instance.showBands ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50' : 'bg-black/60 text-white/50 border border-white/10'}`}
+                            >
+                              {instance.showBands ? 'ON' : 'OFF'}
+                            </button>
+                          </div>
+                          {instance.showBands && (
+                            <div className="space-y-2 pt-1">
+                              {/* Band 1 */}
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <button onClick={() => updateAnchoredVwapInstance(instance.id, { showBand1: !instance.showBand1 })} className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${instance.showBand1 ? 'bg-green-500/30 border-green-500 text-green-400' : 'bg-black/60 border-white/20'}`}>{instance.showBand1 && '✓'}</button>
+                                  <span className="text-xs text-green-400 w-8">±1σ</span>
+                                  <input type="number" step="0.1" min="0.1" max="5" value={instance.bandMult1} onChange={(e) => updateAnchoredVwapInstance(instance.id, { bandMult1: parseFloat(e.target.value) || 1 })} className="w-14 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none" />
+                                </div>
+                                {instance.showBand1 && (
+                                  <div className="space-y-1 pl-6">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {['#22c55e', '#3b82f6', '#a855f7', '#f59e0b', '#ec4899', '#14b8a6', '#ef4444', '#ffffff'].map(color => (
+                                        <button key={color} onClick={() => updateAnchoredVwapInstance(instance.id, { bandColor1: color })} className={`w-4 h-4 rounded border-2 transition-all ${instance.bandColor1 === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`} style={{ backgroundColor: color }} />
+                                      ))}
+                                      <input type="color" value={instance.bandColor1} onChange={(e) => updateAnchoredVwapInstance(instance.id, { bandColor1: e.target.value })} className="w-4 h-4 rounded cursor-pointer border-0 p-0 bg-transparent" title="Custom color" />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                        <button key={style.value} onClick={() => updateAnchoredVwapInstance(instance.id, { bandLineStyle1: style.value })} className={`w-6 h-5 rounded text-xs font-mono transition-all text-white ${instance.bandLineStyle1 === style.value ? 'bg-green-500/30 border-green-500' : 'bg-black/60 border-white/20'} border`}>{style.label}</button>
+                                      ))}
+                                      <span className="w-1" />
+                                      {[1, 2, 3, 4].map(width => (
+                                        <button key={width} onClick={() => updateAnchoredVwapInstance(instance.id, { bandLineWidth1: width })} className={`w-5 h-5 rounded text-xs transition-all text-white ${instance.bandLineWidth1 === width ? 'bg-green-500/30 border-green-500' : 'bg-black/60 border-white/20'} border`}>{width}</button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              {/* Band 2 */}
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <button onClick={() => updateAnchoredVwapInstance(instance.id, { showBand2: !instance.showBand2 })} className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${instance.showBand2 ? 'bg-yellow-500/30 border-yellow-500 text-yellow-400' : 'bg-black/60 border-white/20'}`}>{instance.showBand2 && '✓'}</button>
+                                  <span className="text-xs text-yellow-400 w-8">±2σ</span>
+                                  <input type="number" step="0.1" min="0.1" max="5" value={instance.bandMult2} onChange={(e) => updateAnchoredVwapInstance(instance.id, { bandMult2: parseFloat(e.target.value) || 2 })} className="w-14 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none" />
+                                </div>
+                                {instance.showBand2 && (
+                                  <div className="space-y-1 pl-6">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {['#eab308', '#3b82f6', '#a855f7', '#22c55e', '#ec4899', '#14b8a6', '#ef4444', '#ffffff'].map(color => (
+                                        <button key={color} onClick={() => updateAnchoredVwapInstance(instance.id, { bandColor2: color })} className={`w-4 h-4 rounded border-2 transition-all ${instance.bandColor2 === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`} style={{ backgroundColor: color }} />
+                                      ))}
+                                      <input type="color" value={instance.bandColor2} onChange={(e) => updateAnchoredVwapInstance(instance.id, { bandColor2: e.target.value })} className="w-4 h-4 rounded cursor-pointer border-0 p-0 bg-transparent" title="Custom color" />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                        <button key={style.value} onClick={() => updateAnchoredVwapInstance(instance.id, { bandLineStyle2: style.value })} className={`w-6 h-5 rounded text-xs font-mono transition-all text-white ${instance.bandLineStyle2 === style.value ? 'bg-yellow-500/30 border-yellow-500' : 'bg-black/60 border-white/20'} border`}>{style.label}</button>
+                                      ))}
+                                      <span className="w-1" />
+                                      {[1, 2, 3, 4].map(width => (
+                                        <button key={width} onClick={() => updateAnchoredVwapInstance(instance.id, { bandLineWidth2: width })} className={`w-5 h-5 rounded text-xs transition-all text-white ${instance.bandLineWidth2 === width ? 'bg-yellow-500/30 border-yellow-500' : 'bg-black/60 border-white/20'} border`}>{width}</button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              {/* Band 3 */}
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <button onClick={() => updateAnchoredVwapInstance(instance.id, { showBand3: !instance.showBand3 })} className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${instance.showBand3 ? 'bg-teal-500/30 border-teal-500 text-teal-400' : 'bg-black/60 border-white/20'}`}>{instance.showBand3 && '✓'}</button>
+                                  <span className="text-xs text-teal-400 w-8">±3σ</span>
+                                  <input type="number" step="0.1" min="0.1" max="5" value={instance.bandMult3} onChange={(e) => updateAnchoredVwapInstance(instance.id, { bandMult3: parseFloat(e.target.value) || 3 })} className="w-14 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none" />
+                                </div>
+                                {instance.showBand3 && (
+                                  <div className="space-y-1 pl-6">
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {['#14b8a6', '#3b82f6', '#a855f7', '#22c55e', '#ec4899', '#eab308', '#ef4444', '#ffffff'].map(color => (
+                                        <button key={color} onClick={() => updateAnchoredVwapInstance(instance.id, { bandColor3: color })} className={`w-4 h-4 rounded border-2 transition-all ${instance.bandColor3 === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`} style={{ backgroundColor: color }} />
+                                      ))}
+                                      <input type="color" value={instance.bandColor3} onChange={(e) => updateAnchoredVwapInstance(instance.id, { bandColor3: e.target.value })} className="w-4 h-4 rounded cursor-pointer border-0 p-0 bg-transparent" title="Custom color" />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                        <button key={style.value} onClick={() => updateAnchoredVwapInstance(instance.id, { bandLineStyle3: style.value })} className={`w-6 h-5 rounded text-xs font-mono transition-all text-white ${instance.bandLineStyle3 === style.value ? 'bg-teal-500/30 border-teal-500' : 'bg-black/60 border-white/20'} border`}>{style.label}</button>
+                                      ))}
+                                      <span className="w-1" />
+                                      {[1, 2, 3, 4].map(width => (
+                                        <button key={width} onClick={() => updateAnchoredVwapInstance(instance.id, { bandLineWidth3: width })} className={`w-5 h-5 rounded text-xs transition-all text-white ${instance.bandLineWidth3 === width ? 'bg-teal-500/30 border-teal-500' : 'bg-black/60 border-white/20'} border`}>{width}</button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          {/* Main line Color */}
+                          <div className="flex items-center gap-2 pt-1">
+                            <span className="text-xs text-white/50 w-14">Color</span>
+                            <div className="flex gap-1 flex-wrap">
+                              {['#a855f7', '#22d3ee', '#f59e0b', '#ec4899', '#10b981', '#3b82f6', '#ef4444', '#ffffff'].map(color => (
+                                <button
+                                  key={color}
+                                  onClick={() => updateAnchoredVwapInstance(instance.id, { color })}
+                                  className={`w-5 h-5 rounded border-2 transition-all ${instance.color === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`}
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                              <input
+                                type="color"
+                                value={instance.color}
+                                onChange={(e) => updateAnchoredVwapInstance(instance.id, { color: e.target.value })}
+                                className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+                                title="Custom color"
+                              />
+                            </div>
+                          </div>
+                          {/* Main line Style */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Style</span>
+                            <div className="flex gap-1">
+                              {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                <button
+                                  key={style.value}
+                                  onClick={() => updateAnchoredVwapInstance(instance.id, { lineStyle: style.value })}
+                                  className={`w-7 h-6 rounded text-xs font-mono transition-all text-white ${instance.lineStyle === style.value ? 'bg-purple-500/30 border-purple-500' : 'bg-black/60 border-white/20 hover:border-purple-500/50'} border`}
+                                >
+                                  {style.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {/* Main line Width */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Width</span>
+                            <div className="flex gap-1">
+                              {[1, 2, 3, 4].map(width => (
+                                <button
+                                  key={width}
+                                  onClick={() => updateAnchoredVwapInstance(instance.id, { lineWidth: width })}
+                                  className={`w-6 h-6 rounded text-xs transition-all text-white ${instance.lineWidth === width ? 'bg-purple-500/30 border-purple-500' : 'bg-black/60 border-white/20 hover:border-purple-500/50'} border`}
+                                >
+                                  {width}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {/* Presets */}
+                          <div className="border-t border-white/10 pt-2 mt-2">
+                            <div className="text-xs text-white/50 mb-1">Presets</div>
+                            <div className="space-y-1 max-h-20 overflow-y-auto">
+                              {indicatorPresets.avwap.map((preset, idx) => (
+                                <div key={idx} className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => {
+                                      const presetUpdate: Partial<AnchoredVWAPInstance> = {
+                                        color: preset.color,
+                                        lineWidth: preset.lineWidth,
+                                        lineStyle: preset.lineStyle,
+                                        source: (preset.source as VWAPSource) || instance.source,
+                                      };
+                                      if (preset.showBands !== undefined) presetUpdate.showBands = preset.showBands;
+                                      if (preset.showBand1 !== undefined) presetUpdate.showBand1 = preset.showBand1;
+                                      if (preset.showBand2 !== undefined) presetUpdate.showBand2 = preset.showBand2;
+                                      if (preset.showBand3 !== undefined) presetUpdate.showBand3 = preset.showBand3;
+                                      if (preset.bandMultiplier1 !== undefined) presetUpdate.bandMult1 = preset.bandMultiplier1;
+                                      if (preset.bandMultiplier2 !== undefined) presetUpdate.bandMult2 = preset.bandMultiplier2;
+                                      if (preset.bandMultiplier3 !== undefined) presetUpdate.bandMult3 = preset.bandMultiplier3;
+                                      if (preset.bandColor1) presetUpdate.bandColor1 = preset.bandColor1;
+                                      if (preset.bandColor2) presetUpdate.bandColor2 = preset.bandColor2;
+                                      if (preset.bandColor3) presetUpdate.bandColor3 = preset.bandColor3;
+                                      if (preset.bandLineWidth1 !== undefined) presetUpdate.bandLineWidth1 = preset.bandLineWidth1;
+                                      if (preset.bandLineStyle1 !== undefined) presetUpdate.bandLineStyle1 = preset.bandLineStyle1;
+                                      if (preset.bandLineWidth2 !== undefined) presetUpdate.bandLineWidth2 = preset.bandLineWidth2;
+                                      if (preset.bandLineStyle2 !== undefined) presetUpdate.bandLineStyle2 = preset.bandLineStyle2;
+                                      if (preset.bandLineWidth3 !== undefined) presetUpdate.bandLineWidth3 = preset.bandLineWidth3;
+                                      if (preset.bandLineStyle3 !== undefined) presetUpdate.bandLineStyle3 = preset.bandLineStyle3;
+                                      updateAnchoredVwapInstance(instance.id, presetUpdate);
+                                    }}
+                                    className="flex-1 px-2 py-1 text-left text-xs rounded bg-black/40 hover:bg-purple-500/20 text-white/70 hover:text-white truncate"
+                                  >
+                                    <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: preset.color }} />
+                                    {preset.name}
+                                  </button>
+                                  <button
+                                    onClick={() => setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      avwap: prev.avwap.filter((_, i) => i !== idx)
+                                    }))}
+                                    className="p-1 hover:bg-red-500/20 rounded"
+                                    title="Delete preset"
+                                  >
+                                    <X className="h-3 w-3 text-white/30 hover:text-red-400" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              <input
+                                type="text"
+                                placeholder="Preset name..."
+                                value={activeIndicatorSettings === instance.id ? newIndicatorPresetName : ''}
+                                onChange={(e) => setNewIndicatorPresetName(e.target.value)}
+                                className="flex-1 px-2 py-1 text-xs rounded bg-black/60 border border-white/10 text-white/70 focus:outline-none focus:border-purple-500/50"
+                              />
+                              <button
+                                onClick={() => {
+                                  if (newIndicatorPresetName.trim()) {
+                                    setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      avwap: [...prev.avwap, {
+                                        name: newIndicatorPresetName.trim(),
+                                        color: instance.color,
+                                        lineWidth: instance.lineWidth,
+                                        lineStyle: instance.lineStyle,
+                                        source: instance.source,
+                                        showBands: instance.showBands,
+                                        showBand1: instance.showBand1,
+                                        showBand2: instance.showBand2,
+                                        showBand3: instance.showBand3,
+                                        bandMultiplier1: instance.bandMult1,
+                                        bandMultiplier2: instance.bandMult2,
+                                        bandMultiplier3: instance.bandMult3,
+                                        bandColor1: instance.bandColor1,
+                                        bandColor2: instance.bandColor2,
+                                        bandColor3: instance.bandColor3,
+                                        bandLineWidth1: instance.bandLineWidth1,
+                                        bandLineStyle1: instance.bandLineStyle1,
+                                        bandLineWidth2: instance.bandLineWidth2,
+                                        bandLineStyle2: instance.bandLineStyle2,
+                                        bandLineWidth3: instance.bandLineWidth3,
+                                        bandLineStyle3: instance.bandLineStyle3,
+                                      }]
+                                    }));
+                                    setNewIndicatorPresetName('');
+                                  }
+                                }}
+                                className="px-2 py-1 text-xs rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30"
+                              >
+                                <Save className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* SMA Instances */}
+                  {smaInstances.map((instance) => (
+                    <div key={instance.id} className="bg-black/40 rounded border border-white/10">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: instance.color }} />
+                        <span className="text-sm flex-1" style={{ color: instance.color }}>{instance.name}</span>
+                        <button
+                          onClick={() => setActiveIndicatorSettings(activeIndicatorSettings === instance.id ? null : instance.id)}
+                          className={`p-1 rounded transition-colors ${activeIndicatorSettings === instance.id ? 'bg-cyan-500/20' : 'hover:bg-white/10'}`}
+                          title="Settings"
+                        >
+                          <Settings className="h-3 w-3 text-white/50 hover:text-cyan-400" />
+                        </button>
+                        <button
+                          onClick={() => removeSmaInstance(instance.id)}
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3 text-white/50 hover:text-red-400" />
+                        </button>
+                      </div>
+                      {activeIndicatorSettings === instance.id && (
+                        <div className="px-3 pb-3 pt-1 border-t border-white/10 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Period</span>
+                            <input
+                              type="number"
+                              min="1"
+                              max="500"
+                              value={instance.period}
+                              onChange={(e) => updateSmaInstance(instance.id, { period: Math.max(1, parseInt(e.target.value) || 20) })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-cyan-500/50 w-16"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Color</span>
+                            <div className="flex gap-1 flex-wrap">
+                              {['#22d3ee', '#a855f7', '#f59e0b', '#ec4899', '#10b981', '#3b82f6', '#ef4444', '#ffffff'].map(color => (
+                                <button
+                                  key={color}
+                                  onClick={() => updateSmaInstance(instance.id, { color })}
+                                  className={`w-5 h-5 rounded border-2 transition-all ${instance.color === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`}
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                              <input
+                                type="color"
+                                value={instance.color}
+                                onChange={(e) => updateSmaInstance(instance.id, { color: e.target.value })}
+                                className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+                                title="Custom color"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Style</span>
+                            <div className="flex gap-1">
+                              {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                <button
+                                  key={style.value}
+                                  onClick={() => updateSmaInstance(instance.id, { lineStyle: style.value })}
+                                  className={`w-7 h-6 rounded text-xs font-mono transition-all text-white ${instance.lineStyle === style.value ? 'bg-cyan-500/30 border-cyan-500' : 'bg-black/60 border-white/20 hover:border-cyan-500/50'} border`}
+                                >
+                                  {style.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Width</span>
+                            <div className="flex gap-1">
+                              {[1, 2, 3, 4].map(width => (
+                                <button
+                                  key={width}
+                                  onClick={() => updateSmaInstance(instance.id, { lineWidth: width })}
+                                  className={`w-6 h-6 rounded text-xs transition-all text-white ${instance.lineWidth === width ? 'bg-cyan-500/30 border-cyan-500' : 'bg-black/60 border-white/20 hover:border-cyan-500/50'} border`}
+                                >
+                                  {width}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {/* Presets */}
+                          <div className="border-t border-white/10 pt-2 mt-2">
+                            <div className="text-xs text-white/50 mb-1">Presets</div>
+                            <div className="space-y-1 max-h-20 overflow-y-auto">
+                              {indicatorPresets.sma.map((preset, idx) => (
+                                <div key={idx} className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => updateSmaInstance(instance.id, {
+                                      color: preset.color,
+                                      lineWidth: preset.lineWidth,
+                                      lineStyle: preset.lineStyle,
+                                      period: preset.period || instance.period
+                                    })}
+                                    className="flex-1 px-2 py-1 text-left text-xs rounded bg-black/40 hover:bg-cyan-500/20 text-white/70 hover:text-white truncate"
+                                  >
+                                    <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: preset.color }} />
+                                    {preset.name}
+                                  </button>
+                                  <button
+                                    onClick={() => setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      sma: prev.sma.filter((_, i) => i !== idx)
+                                    }))}
+                                    className="p-1 hover:bg-red-500/20 rounded"
+                                    title="Delete preset"
+                                  >
+                                    <X className="h-3 w-3 text-white/30 hover:text-red-400" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              <input
+                                type="text"
+                                placeholder="Preset name..."
+                                value={activeIndicatorSettings === instance.id ? newIndicatorPresetName : ''}
+                                onChange={(e) => setNewIndicatorPresetName(e.target.value)}
+                                className="flex-1 px-2 py-1 text-xs rounded bg-black/60 border border-white/10 text-white/70 focus:outline-none focus:border-cyan-500/50"
+                              />
+                              <button
+                                onClick={() => {
+                                  if (newIndicatorPresetName.trim()) {
+                                    setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      sma: [...prev.sma, {
+                                        name: newIndicatorPresetName.trim(),
+                                        color: instance.color,
+                                        lineWidth: instance.lineWidth,
+                                        lineStyle: instance.lineStyle,
+                                        period: instance.period
+                                      }]
+                                    }));
+                                    setNewIndicatorPresetName('');
+                                  }
+                                }}
+                                className="px-2 py-1 text-xs rounded bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30"
+                              >
+                                <Save className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* EMA Instances */}
+                  {emaInstances.map((instance) => (
+                    <div key={instance.id} className="bg-black/40 rounded border border-white/10">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: instance.color }} />
+                        <span className="text-sm flex-1" style={{ color: instance.color }}>{instance.name}</span>
+                        <button
+                          onClick={() => setActiveIndicatorSettings(activeIndicatorSettings === instance.id ? null : instance.id)}
+                          className={`p-1 rounded transition-colors ${activeIndicatorSettings === instance.id ? 'bg-purple-500/20' : 'hover:bg-white/10'}`}
+                          title="Settings"
+                        >
+                          <Settings className="h-3 w-3 text-white/50 hover:text-purple-400" />
+                        </button>
+                        <button
+                          onClick={() => removeEmaInstance(instance.id)}
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3 text-white/50 hover:text-red-400" />
+                        </button>
+                      </div>
+                      {activeIndicatorSettings === instance.id && (
+                        <div className="px-3 pb-3 pt-1 border-t border-white/10 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Period</span>
+                            <input
+                              type="number"
+                              min="1"
+                              max="500"
+                              value={instance.period}
+                              onChange={(e) => updateEmaInstance(instance.id, { period: Math.max(1, parseInt(e.target.value) || 12) })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-purple-500/50 w-16"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Color</span>
+                            <div className="flex gap-1 flex-wrap">
+                              {['#a855f7', '#22d3ee', '#f59e0b', '#ec4899', '#10b981', '#3b82f6', '#ef4444', '#ffffff'].map(color => (
+                                <button
+                                  key={color}
+                                  onClick={() => updateEmaInstance(instance.id, { color })}
+                                  className={`w-5 h-5 rounded border-2 transition-all ${instance.color === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`}
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                              <input
+                                type="color"
+                                value={instance.color}
+                                onChange={(e) => updateEmaInstance(instance.id, { color: e.target.value })}
+                                className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+                                title="Custom color"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Style</span>
+                            <div className="flex gap-1">
+                              {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                <button
+                                  key={style.value}
+                                  onClick={() => updateEmaInstance(instance.id, { lineStyle: style.value })}
+                                  className={`w-7 h-6 rounded text-xs font-mono transition-all text-white ${instance.lineStyle === style.value ? 'bg-purple-500/30 border-purple-500' : 'bg-black/60 border-white/20 hover:border-purple-500/50'} border`}
+                                >
+                                  {style.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Width</span>
+                            <div className="flex gap-1">
+                              {[1, 2, 3, 4].map(width => (
+                                <button
+                                  key={width}
+                                  onClick={() => updateEmaInstance(instance.id, { lineWidth: width })}
+                                  className={`w-6 h-6 rounded text-xs transition-all text-white ${instance.lineWidth === width ? 'bg-purple-500/30 border-purple-500' : 'bg-black/60 border-white/20 hover:border-purple-500/50'} border`}
+                                >
+                                  {width}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {/* Presets */}
+                          <div className="border-t border-white/10 pt-2 mt-2">
+                            <div className="text-xs text-white/50 mb-1">Presets</div>
+                            <div className="space-y-1 max-h-20 overflow-y-auto">
+                              {indicatorPresets.ema.map((preset, idx) => (
+                                <div key={idx} className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => updateEmaInstance(instance.id, {
+                                      color: preset.color,
+                                      lineWidth: preset.lineWidth,
+                                      lineStyle: preset.lineStyle,
+                                      period: preset.period || instance.period
+                                    })}
+                                    className="flex-1 px-2 py-1 text-left text-xs rounded bg-black/40 hover:bg-purple-500/20 text-white/70 hover:text-white truncate"
+                                  >
+                                    <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: preset.color }} />
+                                    {preset.name}
+                                  </button>
+                                  <button
+                                    onClick={() => setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      ema: prev.ema.filter((_, i) => i !== idx)
+                                    }))}
+                                    className="p-1 hover:bg-red-500/20 rounded"
+                                    title="Delete preset"
+                                  >
+                                    <X className="h-3 w-3 text-white/30 hover:text-red-400" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              <input
+                                type="text"
+                                placeholder="Preset name..."
+                                value={activeIndicatorSettings === instance.id ? newIndicatorPresetName : ''}
+                                onChange={(e) => setNewIndicatorPresetName(e.target.value)}
+                                className="flex-1 px-2 py-1 text-xs rounded bg-black/60 border border-white/10 text-white/70 focus:outline-none focus:border-purple-500/50"
+                              />
+                              <button
+                                onClick={() => {
+                                  if (newIndicatorPresetName.trim()) {
+                                    setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      ema: [...prev.ema, {
+                                        name: newIndicatorPresetName.trim(),
+                                        color: instance.color,
+                                        lineWidth: instance.lineWidth,
+                                        lineStyle: instance.lineStyle,
+                                        period: instance.period
+                                      }]
+                                    }));
+                                    setNewIndicatorPresetName('');
+                                  }
+                                }}
+                                className="px-2 py-1 text-xs rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30"
+                              >
+                                <Save className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* RSI Instances */}
+                  {rsiInstances.map((instance) => (
+                    <div key={instance.id} className="bg-black/40 rounded border border-white/10">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: instance.color }} />
+                        <span className="text-sm flex-1" style={{ color: instance.color }}>{instance.name}</span>
+                        <button
+                          onClick={() => setActiveIndicatorSettings(activeIndicatorSettings === instance.id ? null : instance.id)}
+                          className={`p-1 rounded transition-colors ${activeIndicatorSettings === instance.id ? 'bg-pink-500/20' : 'hover:bg-white/10'}`}
+                          title="Settings"
+                        >
+                          <Settings className="h-3 w-3 text-white/50 hover:text-pink-400" />
+                        </button>
+                        <button
+                          onClick={() => removeRsiInstance(instance.id)}
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3 text-white/50 hover:text-red-400" />
+                        </button>
+                      </div>
+                      {activeIndicatorSettings === instance.id && (
+                        <div className="px-3 pb-3 pt-1 border-t border-white/10 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Period</span>
+                            <input
+                              type="number"
+                              min="2"
+                              max="100"
+                              value={instance.period}
+                              onChange={(e) => updateRsiInstance(instance.id, { period: Math.max(2, parseInt(e.target.value) || 14) })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-pink-500/50 w-16"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Color</span>
+                            <div className="flex gap-1 flex-wrap">
+                              {['#ec4899', '#22d3ee', '#a855f7', '#f59e0b', '#10b981', '#3b82f6', '#ef4444', '#ffffff'].map(color => (
+                                <button
+                                  key={color}
+                                  onClick={() => updateRsiInstance(instance.id, { color })}
+                                  className={`w-5 h-5 rounded border-2 transition-all ${instance.color === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`}
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                              <input
+                                type="color"
+                                value={instance.color}
+                                onChange={(e) => updateRsiInstance(instance.id, { color: e.target.value })}
+                                className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+                                title="Custom color"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Style</span>
+                            <div className="flex gap-1">
+                              {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                <button
+                                  key={style.value}
+                                  onClick={() => updateRsiInstance(instance.id, { lineStyle: style.value })}
+                                  className={`w-7 h-6 rounded text-xs font-mono transition-all text-white ${instance.lineStyle === style.value ? 'bg-pink-500/30 border-pink-500' : 'bg-black/60 border-white/20 hover:border-pink-500/50'} border`}
+                                >
+                                  {style.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Width</span>
+                            <div className="flex gap-1">
+                              {[1, 2, 3, 4].map(width => (
+                                <button
+                                  key={width}
+                                  onClick={() => updateRsiInstance(instance.id, { lineWidth: width })}
+                                  className={`w-6 h-6 rounded text-xs transition-all text-white ${instance.lineWidth === width ? 'bg-pink-500/30 border-pink-500' : 'bg-black/60 border-white/20 hover:border-pink-500/50'} border`}
+                                >
+                                  {width}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {/* Presets */}
+                          <div className="border-t border-white/10 pt-2 mt-2">
+                            <div className="text-xs text-white/50 mb-1">Presets</div>
+                            <div className="space-y-1 max-h-20 overflow-y-auto">
+                              {indicatorPresets.rsi.map((preset, idx) => (
+                                <div key={idx} className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => updateRsiInstance(instance.id, {
+                                      color: preset.color,
+                                      lineWidth: preset.lineWidth,
+                                      lineStyle: preset.lineStyle,
+                                      period: preset.period || instance.period
+                                    })}
+                                    className="flex-1 px-2 py-1 text-left text-xs rounded bg-black/40 hover:bg-pink-500/20 text-white/70 hover:text-white truncate"
+                                  >
+                                    <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: preset.color }} />
+                                    {preset.name}
+                                  </button>
+                                  <button
+                                    onClick={() => setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      rsi: prev.rsi.filter((_, i) => i !== idx)
+                                    }))}
+                                    className="p-1 hover:bg-red-500/20 rounded"
+                                    title="Delete preset"
+                                  >
+                                    <X className="h-3 w-3 text-white/30 hover:text-red-400" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              <input
+                                type="text"
+                                placeholder="Preset name..."
+                                value={activeIndicatorSettings === instance.id ? newIndicatorPresetName : ''}
+                                onChange={(e) => setNewIndicatorPresetName(e.target.value)}
+                                className="flex-1 px-2 py-1 text-xs rounded bg-black/60 border border-white/10 text-white/70 focus:outline-none focus:border-pink-500/50"
+                              />
+                              <button
+                                onClick={() => {
+                                  if (newIndicatorPresetName.trim()) {
+                                    setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      rsi: [...prev.rsi, {
+                                        name: newIndicatorPresetName.trim(),
+                                        color: instance.color,
+                                        lineWidth: instance.lineWidth,
+                                        lineStyle: instance.lineStyle,
+                                        period: instance.period
+                                      }]
+                                    }));
+                                    setNewIndicatorPresetName('');
+                                  }
+                                }}
+                                className="px-2 py-1 text-xs rounded bg-pink-500/20 hover:bg-pink-500/30 text-pink-300 border border-pink-500/30"
+                              >
+                                <Save className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Bollinger Bands Instances */}
+                  {bbInstances.map((instance) => (
+                    <div key={instance.id} className="bg-black/40 rounded border border-white/10">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: instance.color }} />
+                        <span className="text-sm flex-1" style={{ color: instance.color }}>{instance.name}</span>
+                        <button
+                          onClick={() => setActiveIndicatorSettings(activeIndicatorSettings === instance.id ? null : instance.id)}
+                          className={`p-1 rounded transition-colors ${activeIndicatorSettings === instance.id ? 'bg-amber-500/20' : 'hover:bg-white/10'}`}
+                          title="Settings"
+                        >
+                          <Settings className="h-3 w-3 text-white/50 hover:text-amber-400" />
+                        </button>
+                        <button
+                          onClick={() => removeBbInstance(instance.id)}
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3 text-white/50 hover:text-red-400" />
+                        </button>
+                      </div>
+                      {activeIndicatorSettings === instance.id && (
+                        <div className="px-3 pb-3 pt-1 border-t border-white/10 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Period</span>
+                            <input
+                              type="number"
+                              min="5"
+                              max="200"
+                              value={instance.period}
+                              onChange={(e) => updateBbInstance(instance.id, { period: Math.max(5, parseInt(e.target.value) || 20) })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-amber-500/50 w-16"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Std Dev</span>
+                            <input
+                              type="number"
+                              min="0.5"
+                              max="5"
+                              step="0.5"
+                              value={instance.stdDev}
+                              onChange={(e) => updateBbInstance(instance.id, { stdDev: Math.max(0.5, parseFloat(e.target.value) || 2) })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-amber-500/50 w-16"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Color</span>
+                            <div className="flex gap-1 flex-wrap">
+                              {['#f59e0b', '#22d3ee', '#a855f7', '#ec4899', '#10b981', '#3b82f6', '#ef4444', '#ffffff'].map(color => (
+                                <button
+                                  key={color}
+                                  onClick={() => updateBbInstance(instance.id, { color })}
+                                  className={`w-5 h-5 rounded border-2 transition-all ${instance.color === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`}
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                              <input
+                                type="color"
+                                value={instance.color}
+                                onChange={(e) => updateBbInstance(instance.id, { color: e.target.value })}
+                                className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+                                title="Custom color"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Band Style</span>
+                            <div className="flex gap-1">
+                              {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                <button
+                                  key={style.value}
+                                  onClick={() => updateBbInstance(instance.id, { lineStyle: style.value })}
+                                  className={`w-7 h-6 rounded text-xs font-mono transition-all text-white ${instance.lineStyle === style.value ? 'bg-amber-500/30 border-amber-500' : 'bg-black/60 border-white/20 hover:border-amber-500/50'} border`}
+                                >
+                                  {style.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Width</span>
+                            <div className="flex gap-1">
+                              {[1, 2, 3, 4].map(width => (
+                                <button
+                                  key={width}
+                                  onClick={() => updateBbInstance(instance.id, { lineWidth: width })}
+                                  className={`w-6 h-6 rounded text-xs transition-all text-white ${instance.lineWidth === width ? 'bg-amber-500/30 border-amber-500' : 'bg-black/60 border-white/20 hover:border-amber-500/50'} border`}
+                                >
+                                  {width}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {/* Presets */}
+                          <div className="border-t border-white/10 pt-2 mt-2">
+                            <div className="text-xs text-white/50 mb-1">Presets</div>
+                            <div className="space-y-1 max-h-20 overflow-y-auto">
+                              {indicatorPresets.bb.map((preset, idx) => (
+                                <div key={idx} className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => updateBbInstance(instance.id, {
+                                      color: preset.color,
+                                      lineWidth: preset.lineWidth,
+                                      lineStyle: preset.lineStyle,
+                                      period: preset.period || instance.period,
+                                      stdDev: preset.stdDev || instance.stdDev
+                                    })}
+                                    className="flex-1 px-2 py-1 text-left text-xs rounded bg-black/40 hover:bg-amber-500/20 text-white/70 hover:text-white truncate"
+                                  >
+                                    <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: preset.color }} />
+                                    {preset.name}
+                                  </button>
+                                  <button
+                                    onClick={() => setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      bb: prev.bb.filter((_, i) => i !== idx)
+                                    }))}
+                                    className="p-1 hover:bg-red-500/20 rounded"
+                                    title="Delete preset"
+                                  >
+                                    <X className="h-3 w-3 text-white/30 hover:text-red-400" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              <input
+                                type="text"
+                                placeholder="Preset name..."
+                                value={activeIndicatorSettings === instance.id ? newIndicatorPresetName : ''}
+                                onChange={(e) => setNewIndicatorPresetName(e.target.value)}
+                                className="flex-1 px-2 py-1 text-xs rounded bg-black/60 border border-white/10 text-white/70 focus:outline-none focus:border-amber-500/50"
+                              />
+                              <button
+                                onClick={() => {
+                                  if (newIndicatorPresetName.trim()) {
+                                    setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      bb: [...prev.bb, {
+                                        name: newIndicatorPresetName.trim(),
+                                        color: instance.color,
+                                        lineWidth: instance.lineWidth,
+                                        lineStyle: instance.lineStyle,
+                                        period: instance.period,
+                                        stdDev: instance.stdDev
+                                      }]
+                                    }));
+                                    setNewIndicatorPresetName('');
+                                  }
+                                }}
+                                className="px-2 py-1 text-xs rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30"
+                              >
+                                <Save className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* MACD Instances */}
+                  {macdInstances.map((instance) => (
+                    <div key={instance.id} className="bg-black/40 rounded border border-white/10">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: instance.color }} />
+                        <span className="text-sm flex-1" style={{ color: instance.color }}>{instance.name}</span>
+                        <button
+                          onClick={() => setActiveIndicatorSettings(activeIndicatorSettings === instance.id ? null : instance.id)}
+                          className={`p-1 rounded transition-colors ${activeIndicatorSettings === instance.id ? 'bg-blue-500/20' : 'hover:bg-white/10'}`}
+                          title="Settings"
+                        >
+                          <Settings className="h-3 w-3 text-white/50 hover:text-blue-400" />
+                        </button>
+                        <button
+                          onClick={() => removeMacdInstance(instance.id)}
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3 text-white/50 hover:text-red-400" />
+                        </button>
+                      </div>
+                      {activeIndicatorSettings === instance.id && (
+                        <div className="px-3 pb-3 pt-1 border-t border-white/10 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Fast</span>
+                            <input
+                              type="number"
+                              min="2"
+                              max="50"
+                              value={instance.fastPeriod}
+                              onChange={(e) => updateMacdInstance(instance.id, { fastPeriod: Math.max(2, parseInt(e.target.value) || 12) })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-blue-500/50 w-16"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Slow</span>
+                            <input
+                              type="number"
+                              min="10"
+                              max="100"
+                              value={instance.slowPeriod}
+                              onChange={(e) => updateMacdInstance(instance.id, { slowPeriod: Math.max(10, parseInt(e.target.value) || 26) })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-blue-500/50 w-16"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Signal</span>
+                            <input
+                              type="number"
+                              min="2"
+                              max="50"
+                              value={instance.signalPeriod}
+                              onChange={(e) => updateMacdInstance(instance.id, { signalPeriod: Math.max(2, parseInt(e.target.value) || 9) })}
+                              className="flex-1 px-2 py-1 rounded bg-black/60 border border-white/10 text-xs text-white/70 focus:outline-none focus:border-blue-500/50 w-16"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Color</span>
+                            <div className="flex gap-1 flex-wrap">
+                              {['#3b82f6', '#22d3ee', '#a855f7', '#f59e0b', '#10b981', '#ec4899', '#ef4444', '#ffffff'].map(color => (
+                                <button
+                                  key={color}
+                                  onClick={() => updateMacdInstance(instance.id, { color })}
+                                  className={`w-5 h-5 rounded border-2 transition-all ${instance.color === color ? 'border-white scale-110' : 'border-transparent hover:border-white/40'}`}
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                              <input
+                                type="color"
+                                value={instance.color}
+                                onChange={(e) => updateMacdInstance(instance.id, { color: e.target.value })}
+                                className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+                                title="Custom color"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Style</span>
+                            <div className="flex gap-1">
+                              {[{ value: 0, label: '━' }, { value: 1, label: '┄' }, { value: 2, label: '┈' }].map(style => (
+                                <button
+                                  key={style.value}
+                                  onClick={() => updateMacdInstance(instance.id, { lineStyle: style.value })}
+                                  className={`w-7 h-6 rounded text-xs font-mono transition-all text-white ${instance.lineStyle === style.value ? 'bg-blue-500/30 border-blue-500' : 'bg-black/60 border-white/20 hover:border-blue-500/50'} border`}
+                                >
+                                  {style.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-white/50 w-14">Width</span>
+                            <div className="flex gap-1">
+                              {[1, 2, 3, 4].map(width => (
+                                <button
+                                  key={width}
+                                  onClick={() => updateMacdInstance(instance.id, { lineWidth: width })}
+                                  className={`w-6 h-6 rounded text-xs transition-all text-white ${instance.lineWidth === width ? 'bg-blue-500/30 border-blue-500' : 'bg-black/60 border-white/20 hover:border-blue-500/50'} border`}
+                                >
+                                  {width}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {/* Presets */}
+                          <div className="border-t border-white/10 pt-2 mt-2">
+                            <div className="text-xs text-white/50 mb-1">Presets</div>
+                            <div className="space-y-1 max-h-20 overflow-y-auto">
+                              {indicatorPresets.macd.map((preset, idx) => (
+                                <div key={idx} className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => updateMacdInstance(instance.id, {
+                                      color: preset.color,
+                                      lineWidth: preset.lineWidth,
+                                      lineStyle: preset.lineStyle,
+                                      fastPeriod: preset.fastPeriod || instance.fastPeriod,
+                                      slowPeriod: preset.slowPeriod || instance.slowPeriod,
+                                      signalPeriod: preset.signalPeriod || instance.signalPeriod
+                                    })}
+                                    className="flex-1 px-2 py-1 text-left text-xs rounded bg-black/40 hover:bg-blue-500/20 text-white/70 hover:text-white truncate"
+                                  >
+                                    <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: preset.color }} />
+                                    {preset.name}
+                                  </button>
+                                  <button
+                                    onClick={() => setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      macd: prev.macd.filter((_, i) => i !== idx)
+                                    }))}
+                                    className="p-1 hover:bg-red-500/20 rounded"
+                                    title="Delete preset"
+                                  >
+                                    <X className="h-3 w-3 text-white/30 hover:text-red-400" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              <input
+                                type="text"
+                                placeholder="Preset name..."
+                                value={activeIndicatorSettings === instance.id ? newIndicatorPresetName : ''}
+                                onChange={(e) => setNewIndicatorPresetName(e.target.value)}
+                                className="flex-1 px-2 py-1 text-xs rounded bg-black/60 border border-white/10 text-white/70 focus:outline-none focus:border-blue-500/50"
+                              />
+                              <button
+                                onClick={() => {
+                                  if (newIndicatorPresetName.trim()) {
+                                    setIndicatorPresets(prev => ({
+                                      ...prev,
+                                      macd: [...prev.macd, {
+                                        name: newIndicatorPresetName.trim(),
+                                        color: instance.color,
+                                        lineWidth: instance.lineWidth,
+                                        lineStyle: instance.lineStyle,
+                                        fastPeriod: instance.fastPeriod,
+                                        slowPeriod: instance.slowPeriod,
+                                        signalPeriod: instance.signalPeriod
+                                      }]
+                                    }));
+                                    setNewIndicatorPresetName('');
+                                  }
+                                }}
+                                className="px-2 py-1 text-xs rounded bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30"
+                              >
+                                <Save className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Settings Group */}
           <div>
@@ -3530,7 +5699,7 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
       />
 
       {/* Volume Profile Overlay */}
-      {showVolumeProfile && volumeProfile.length > 0 && candlestickSeriesRef.current && (
+      {volumeProfileInstances.length > 0 && volumeProfile.length > 0 && candlestickSeriesRef.current && (
         <div
           key={`vp-${volumeProfileRenderKey}`}
           className="absolute right-[70px] top-0 bottom-[85px] w-24 pointer-events-none z-[45] overflow-hidden"
@@ -5013,6 +7182,94 @@ export default function TradingChart({ symbol, accountId, onSymbolChange }: Trad
           })}
         </svg>
       )}
+
+      {/* Anchored VWAP Anchor Markers */}
+      {selectedAnchoredVwap && chartContainerRef.current && chartRef.current && candlestickSeriesRef.current && (() => {
+        const instance = anchoredVwapInstances.find(i => i.id === selectedAnchoredVwap);
+        if (!instance) return null;
+
+        // Get anchor point coordinates
+        const anchorX = chartRef.current.timeScale().timeToCoordinate(instance.anchorTime as any);
+        if (anchorX === null) return null;
+
+        // Find the VWAP value at anchor point
+        const data = candleDataRef.current;
+        const anchorIdx = data.findIndex(c => {
+          const t = typeof c.time === 'number' ? c.time : 0;
+          return t >= instance.anchorTime;
+        });
+
+        if (anchorIdx < 0) return null;
+
+        const anchorCandle = data[anchorIdx];
+        const tp = (anchorCandle.high + anchorCandle.low + anchorCandle.close) / 3;
+        const anchorY = candlestickSeriesRef.current.priceToCoordinate(tp);
+        if (anchorY === null) return null;
+
+        const isDragging = draggingAnchoredVwap === instance.id;
+
+        return (
+          <svg
+            className="absolute inset-0 z-[65] pointer-events-none"
+            style={{
+              width: chartContainerRef.current.clientWidth,
+              height: 800,
+            }}
+          >
+            <defs>
+              <filter id="anchorGlow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+            {/* Anchor marker - diamond shape */}
+            <g>
+              {/* Outer glow ring */}
+              <circle
+                cx={anchorX}
+                cy={anchorY}
+                r={14}
+                fill="transparent"
+                stroke={instance.color}
+                strokeWidth={2}
+                opacity={0.4}
+                filter="url(#anchorGlow)"
+              />
+              {/* Diamond shape */}
+              <path
+                d={`M ${anchorX} ${anchorY - 10} L ${anchorX + 8} ${anchorY} L ${anchorX} ${anchorY + 10} L ${anchorX - 8} ${anchorY} Z`}
+                fill={isDragging ? '#fff' : instance.color}
+                stroke="#fff"
+                strokeWidth={2}
+                style={{
+                  pointerEvents: 'auto',
+                  cursor: isDragging ? 'grabbing' : 'grab',
+                  filter: `drop-shadow(0 0 6px ${instance.color})`,
+                }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDraggingAnchoredVwap(instance.id);
+                  if (chartRef.current) {
+                    chartRef.current.applyOptions({ handleScroll: false, handleScale: false });
+                  }
+                }}
+              />
+              {/* Inner dot */}
+              <circle
+                cx={anchorX}
+                cy={anchorY}
+                r={3}
+                fill="#fff"
+                style={{ pointerEvents: 'none' }}
+              />
+            </g>
+          </svg>
+        );
+      })()}
 
       {/* Unified Position Labels */}
       {positionsData?.success && currentPrice && positionsData.positions.map((position: any) => {

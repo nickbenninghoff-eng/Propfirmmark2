@@ -53,7 +53,15 @@
       "WebFetch(domain:www.npmjs.com)",
       "Bash(cat:*)",
       "Bash(rm:*)",
-      "Skill(remind)"
+      "Skill(remind)",
+      "WebFetch(domain:www.tradingview.com)",
+      "WebFetch(domain:www.tradingcode.net)",
+      "WebFetch(domain:pinewizards.com)",
+      "WebFetch(domain:pineify.app)",
+      "WebFetch(domain:codepal.ai)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:offline-pixel.github.io)",
+      "Bash(timeout 15 npm run dev:*)"
     ]
   }
 }
