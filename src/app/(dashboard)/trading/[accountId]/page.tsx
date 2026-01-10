@@ -276,7 +276,7 @@ export default function TradingPage() {
 
       {/* Chart Area */}
       <div className="mb-6 rounded-2xl border border-white/20 bg-gradient-to-br from-white/10 to-white/5 p-6 backdrop-blur-xl">
-        <TradingChart symbol={selectedSymbol} accountId={accountId} />
+        <TradingChart symbol={selectedSymbol} accountId={accountId} onSymbolChange={setSelectedSymbol} />
       </div>
 
       {/* Tabs for Order Entry, Positions, Orders */}
